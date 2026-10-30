@@ -1,0 +1,47 @@
+/* Fonts: Apple devices ship Futura and Gill Sans, which are the real typefaces of
+   the film's graphics. Elsewhere we fall back to free look-alikes from Google Fonts. */
+@import url('https://fonts.googleapis.com/css2?family=Jost:wght@300;400;500;700&family=Michroma&family=Share+Tech+Mono&display=swap');
+
+:root {
+  --font-screen: Futura, 'Futura PT', 'Jost', 'Century Gothic', sans-serif;   /* Discovery displays */
+  --font-plate: 'Gill Sans', 'Gill Sans MT', 'Jost', sans-serif;              /* nameplate */
+  --font-wide: 'Eurostile Extended', 'Microgramma', 'Michroma', var(--font-screen); /* extended caps: codes, tags */
+  --font-mono: 'Share Tech Mono', 'OCR A Std', ui-monospace, Menlo, monospace;      /* line-printer data */
+
+  /* Discovery display fields: muted mid-tone solids, white hairline graphics on top. */
+  --field-royal: #2e5bad; --field-blue: #3c55a5; --field-slate: #4b6189;
+  --field-teal: #2e5d5a;  --field-plum: #5a3f62; --field-navy: #18204a; --field-grey: #626569;
+  --chip-yellow: #e6d76a;  /* indicator chip: CAUTION */
+
+  --bg: #000;
+  --ink: #f2f2f2;
+  /* eye colour per theme; HAL red, SAL blue */
+  --eye-core: #fff3cf;   /* HAL: an orange-red core */
+  --eye-hot: #ffb04a;
+  --eye-mid: #ff3d12;
+  --eye-deep: #3d0600;
+  --accent: #ff3d12;
+}
+/* An announced alert turns any 9000 red: the eye and accents switch to HAL's alarm colours. */
+:root.alarm, :root.alarm[data-theme="sal"] {
+  --eye-core: #fff3cf; --eye-hot: #ffb04a; --eye-mid: #ff3d12; --eye-deep: #3d0600; --accent: #ff3d12;
+}
+:root[data-theme="sal"]:not(.alarm) {
+  --eye-core: #eefcff;
+  --eye-hot: #7fe3ff;
+  --eye-mid: #1f6bff;
+  --eye-deep: #001048;
+  --accent: #3d8bff;
+}
+
+* { box-sizing: border-box; }
+html, body {
+  margin: 0; height: 100%;
+  background: var(--bg); color: var(--ink);
+  font-family: var(--font-screen);
+  -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
+  overscroll-behavior: none;
+}
+button, input, select { font: inherit; color: inherit; }
+body.nocursor, body.nocursor * { cursor: none !important; }

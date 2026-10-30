@@ -1,0 +1,16 @@
+{
+  "name": "hal9000",
+  "version": "0.30.0",
+  "private": true,
+  "description": "HAL/SAL 9000 PWA: phone as the eye, tablets/computers as monitors, synced over WebSocket",
+  "type": "module",
+  "scripts": {
+    "start": "node --env-file-if-exists=.env server.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.134.0",
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "qrcode": "^1.5.4",
+    "ws": "^8.18.0"
+  }
+}

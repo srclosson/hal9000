@@ -1,0 +1,22 @@
+# Aboard Discovery One (cluster fe-apps-discovery-one): Civo's Traefik DaemonSet has no IngressClass, so none is set.
+# DNS for 9000.stackgen.run is a DNSEndpoint on fe-stackgen-run (see ~/src/discovery-one/deploy/fe-stackgen-run/dns.yaml).
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: hal9000
+  namespace: hal9000
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    traefik.ingress.kubernetes.io/router.entrypoints: web,websecure
+spec:
+  ingressClassName: null
+  tls:
+    - hosts: [9000.stackgen.run]
+      secretName: hal9000-tls
+  rules:
+    - host: 9000.stackgen.run
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend: { service: { name: hal9000, port: { name: http } } }

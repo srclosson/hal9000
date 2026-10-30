@@ -1,0 +1,20 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: hal9000
+labels:
+  - pairs:
+      app.kubernetes.io/name: hal9000
+    includeSelectors: true
+resources:
+  - namespace.yaml
+  - deployment.yaml
+  - service.yaml
+  - ingress.yaml
+configMapGenerator:
+  # Non-secret settings (LLM and voice). The hash suffix rolls the Deployment when these change.
+  - name: hal9000-config
+    literals:
+      - LLM_PROVIDER=anthropic
+      - LLM_MODEL=claude-opus-5-5
+      - LLM_EFFORT=low
+      - TTS_PROVIDER=browser

@@ -1,0 +1,40 @@
+# RETIRED 2026-10-30: HAL now runs aboard Discovery One (deploy/overlays/discovery, cluster fe-apps-discovery-one,
+# KUBECONFIG=~/.kube/config.discovery-one). This overlay is kept only for rollback: the Deployment on fe-stackgen-run
+# is scaled to 0, and its Ingress no longer has external-dns annotations (9000.stackgen.run is a DNSEndpoint on
+# fe-stackgen-run, see ~/src/discovery-one/deploy/fe-stackgen-run/dns.yaml). To roll back: point that record at
+# 212.2.243.121 and scale this Deployment to 1.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
+images:
+  - name: docker.io/srclosson/hal9000
+    newTag: 0.26.0
+patches:
+  - path: ingress.yaml
+# LLM: the cluster's Ollama (same server as https://ollama.stackgen.run, reached in-cluster).
+# Voice: Chatterbox on the ComfyUI box (NVIDIA L40S); COMFYUI_TOKEN lives in the hal9000-keys Secret.
+# To switch, change these literals, e.g. LLM_PROVIDER=anthropic plus ANTHROPIC_API_KEY in hal9000-keys,
+# or TTS_PROVIDER=browser to fall back to the eye's built-in speech.
+configMapGenerator:
+  - name: hal9000-config
+    behavior: replace
+    literals:
+      - LLM_PROVIDER=openai
+      - LLM_BASE_URL=http://ollama.ollama.svc.cluster.local/v1
+      - LLM_MODEL=glm-5.3:cloud
+      - TTS_PROVIDER=comfyui
+      - COMFYUI_URL=https://comfyui.stackgen.run
+      # Sign-in through Authentik (application "hal9000", @stackgen.com only). OIDC_CLIENT_SECRET and SESSION_SECRET
+      # live in the hal9000-keys Secret.
+      - OIDC_ISSUER=https://auth.stackgen.run/application/o/hal9000/
+      - OIDC_CLIENT_ID=y7NS2FBuZdGhZ38pfxYoevxYxo3KEndUGHk4aEh0
+      - PUBLIC_URL=https://9000.stackgen.run
+      # Where it runs, for its self-description (self/index.js); pod, node and namespace come from the downward API.
+      - HOSTED_ON=Civo Kubernetes (k3s), cluster fe-stackgen-run, region NYC1
+      # The 9000's own traces and metrics (telemetry/index.js), via the relay that feeds the stephgen-medussa
+      # ObserveNow instance the 9000 reads from — so it can see itself with its own tools.
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://data-recipes-traces-relay.data-recipes.svc.cluster.local:4318
+      - OTEL_SERVICE_NAME=hal9000
+      # StackGen Incidents (open incidents by voice, memory for investigations). INCIDENTS_TOKEN is in hal9000-keys.
+      - INCIDENTS_URL=http://stackgen-incidents.incidents.svc.cluster.local

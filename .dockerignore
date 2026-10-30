@@ -1,0 +1,6 @@
+node_modules
+.env
+.env.*
+deploy
+*.md
+evals/report-*

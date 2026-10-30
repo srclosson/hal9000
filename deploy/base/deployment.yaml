@@ -1,0 +1,59 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hal9000
+  namespace: hal9000
+spec:
+  # Rooms live in memory, so this must stay at one replica (clients reconnect across restarts).
+  replicas: 1
+  template:
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000   # the image's "node" user
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: hal9000
+          image: docker.io/srclosson/hal9000:latest
+          ports:
+            - name: http
+              containerPort: 9000
+          # Where the 9000 runs, for its own self-description (self/index.js).
+          env:
+            - name: POD_NAME
+              valueFrom: { fieldRef: { fieldPath: metadata.name } }
+            - name: POD_NAMESPACE
+              valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
+            - name: NODE_NAME
+              valueFrom: { fieldRef: { fieldPath: spec.nodeName } }
+          envFrom:
+            - configMapRef:
+                name: hal9000-config
+            # Secrets (ANTHROPIC_API_KEY, LLM_API_KEY, COMFYUI_TOKEN). Created out of band, never
+            # committed; without it the server still runs (scripted replies, browser speech).
+            - secretRef:
+                name: hal9000-keys
+                optional: true
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: 10m
+              memory: 96Mi
+            limits:
+              memory: 192Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]

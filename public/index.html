@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en" data-theme="sal">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#000000">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/icons/icon.svg">
+<title>9000 Series</title>
+<link rel="stylesheet" href="/base.css">
+<style>
+  body { display: grid; place-items: center; min-height: 100dvh; padding: 16px; text-align: center; text-transform: uppercase; letter-spacing: .16em; }
+  h1 { font-family: var(--font-wide); font-weight: 400; font-size: clamp(20px, 5vw, 34px); margin: 0 0 .3em; }
+  p { color: #999; font-size: 12px; margin: 0 0 32px; }
+  .choices { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); max-width: 560px; margin: 0 auto; }
+  a { display: block; padding: 26px 18px; border: 1px solid #333; color: #fff; text-decoration: none; font-size: 14px; }
+  a:focus-visible { border-color: var(--accent); outline: none; }
+  a small { display: block; margin-top: .8em; color: #888; font-size: 10px; letter-spacing: .1em; }
+</style>
+</head>
+<body>
+  <div>
+    <h1>9000 Series</h1>
+    <p>Choose this device's role</p>
+    <div class="choices">
+      <a href="/eye">Eye<small>Phone · the lens</small></a>
+      <a href="/monitor">Monitor<small>Computer or tablet · new ship</small></a>
+    </div>
+  </div>
+<script type="module">
+  import { registerSW } from '/shared.js';
+  registerSW();
+  // Phones default to the eye.
+  if (matchMedia('(pointer: coarse) and (max-width: 600px)').matches && !location.search.includes('stay')) location.replace('/eye');
+</script>
+</body>
+</html>

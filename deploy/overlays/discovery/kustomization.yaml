@@ -1,0 +1,38 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
+images:
+  - name: docker.io/srclosson/hal9000
+    newTag: 0.30.0
+patches:
+  - path: ingress.yaml
+# HAL aboard Discovery One: cluster fe-apps-discovery-one (kubeconfig ~/.kube/config.discovery-one), alongside the
+# ship's services in namespace discovery. Everything it uses elsewhere is reached over public addresses.
+# LLM: chosen in Settings → Mind; the literals below are only the defaults.
+# Voice: Chatterbox on the ComfyUI box (NVIDIA L40S); COMFYUI_TOKEN lives in the hal9000-keys Secret.
+# To switch, change these literals, e.g. LLM_PROVIDER=anthropic plus ANTHROPIC_API_KEY in hal9000-keys,
+# or TTS_PROVIDER=browser to fall back to the eye's built-in speech.
+configMapGenerator:
+  - name: hal9000-config
+    behavior: replace
+    literals:
+      - LLM_PROVIDER=openai
+      - LLM_BASE_URL=https://ollama.stackgen.run/v1
+      - LLM_MODEL=glm-5.3:cloud
+      - TTS_PROVIDER=comfyui
+      - COMFYUI_URL=https://comfyui.stackgen.run
+      # Sign-in through Authentik (application "hal9000", @stackgen.com only). OIDC_CLIENT_SECRET and SESSION_SECRET
+      # live in the hal9000-keys Secret.
+      - OIDC_ISSUER=https://auth.stackgen.run/application/o/hal9000/
+      - OIDC_CLIENT_ID=y7NS2FBuZdGhZ38pfxYoevxYxo3KEndUGHk4aEh0
+      - PUBLIC_URL=https://9000.stackgen.run
+      # Where it runs, for its self-description (self/index.js); pod, node and namespace come from the downward API.
+      - "HOSTED_ON=aboard Discovery One, on Civo Kubernetes (k3s) cluster fe-apps-discovery-one, region NYC1, beside the ship's own services (gateway, systems, commands)"
+      - CLUSTER_NAME=fe-apps-discovery-one
+      # The 9000's own traces and metrics (telemetry/index.js), via the shared relay's public door (basic auth from
+      # OTEL_EXPORTER_OTLP_HEADERS in the hal9000-keys Secret) into the stephgen-medussa ObserveNow it reads from.
+      - OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp.stackgen.run
+      - OTEL_SERVICE_NAME=hal9000
+      # StackGen Incidents (open incidents by voice, memory for investigations). INCIDENTS_TOKEN is in hal9000-keys.
+      - INCIDENTS_URL=https://incidents.stackgen.run

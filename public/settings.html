@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>9000 · Settings</title>
+<link rel="icon" href="/icons/icon.svg">
+<link rel="stylesheet" href="/base.css">
+<style>
+  /* The ship's configuration console: black ground, one muted field per section, extended capitals for headings,
+     line-printer monospace for values, hairlines, and tags instead of colour. */
+  body { margin: 0; background: #000; color: var(--ink); font-family: var(--font-mono); min-height: 100vh; }
+  header { display: flex; align-items: center; gap: 16px; padding: 14px 24px; border-bottom: 1px solid rgba(255,255,255,.15);
+    text-transform: uppercase; letter-spacing: .12em; font-size: 12px; position: sticky; top: 0; background: #000; z-index: 5; }
+  header .name { font-family: var(--font-wide); background: #f4f4f4; color: #000; padding: .25em .5em .2em .62em; letter-spacing: .2em; }
+  header .num { font-family: var(--font-wide); background: var(--accent); color: #fff; padding: .25em .5em .2em; margin-left: -16px; }
+  header a { color: var(--ink); text-decoration: none; border: 1px solid rgba(255,255,255,.35); padding: .45em .8em; }
+  header a:hover, header a:focus-visible { background: #f4f4f4; color: #000; outline: none; }
+  main { max-width: 1180px; margin: 0 auto; padding: 24px; display: grid; gap: 18px; }
+  h1 { font-family: var(--font-wide); font-weight: 400; letter-spacing: .3em; font-size: clamp(22px, 3vw, 34px); margin: 8px 0 0; }
+  .sub { color: rgba(242,242,242,.6); font-size: 13px; letter-spacing: .04em; line-height: 1.5; max-width: 820px; }
+  section { padding: 20px 22px 22px; }
+  section h2 { font-family: var(--font-wide); font-weight: 400; letter-spacing: .25em; font-size: 15px; margin: 0 0 14px; display: flex; align-items: center; gap: 12px; }
+  section h2 .code { background: #f4f4f4; color: var(--c); padding: .3em .5em .25em .7em; font-size: 13px; }
+  .f-mind { background: var(--field-royal); --c: var(--field-royal); } .f-persona { background: var(--field-plum); --c: var(--field-plum); }
+  .f-board { background: var(--field-teal); --c: var(--field-teal); } .f-alerts { background: var(--field-slate); --c: var(--field-slate); }
+  .f-aiden { background: var(--field-plum); --c: var(--field-plum); } .f-memory { background: var(--field-teal); --c: var(--field-teal); }
+  .f-tools { background: var(--field-navy); --c: var(--field-navy); }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px 22px; }
+  label.set[hidden] { display: none; }
+  label.set { display: grid; gap: 6px; font-size: 12px; letter-spacing: .1em; text-transform: uppercase; color: rgba(242,242,242,.8); }
+  label.set small { text-transform: none; letter-spacing: .02em; color: rgba(242,242,242,.55); font-size: 11.5px; }
+  input, select, textarea { font: inherit; font-size: 14px; color: #fff; background: rgba(0,0,0,.28); border: 1px solid rgba(255,255,255,.3); padding: 8px 10px; letter-spacing: .04em; }
+  input:focus, select:focus { outline: 1px solid #fff; }
+  .unit { display: flex; align-items: center; gap: 8px; } .unit input { width: 110px; }
+  .default { font-size: 11px; color: rgba(242,242,242,.5); text-transform: none; letter-spacing: .02em; }
+  .changed { color: var(--chip-yellow); }
+  button { font: inherit; font-size: 12px; letter-spacing: .14em; text-transform: uppercase; color: #fff; background: none; border: 1px solid rgba(255,255,255,.45); padding: .55em 1em; cursor: pointer; }
+  button:hover, button:focus-visible { background: #f4f4f4; color: #000; outline: none; }
+  button.primary { background: #f4f4f4; color: #000; } button.primary:hover { background: #fff; }
+  button:disabled { opacity: .45; cursor: default; }
+  .bar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 16px; }
+  .meta { font-size: 11px; color: rgba(242,242,242,.55); letter-spacing: .06em; }
+  .tag { font-family: var(--font-wide); font-size: 10px; letter-spacing: .14em; padding: .3em .6em .25em; text-transform: uppercase; }
+  .tag.on { background: #f4f4f4; color: #000; } .tag.off { box-shadow: inset 0 0 0 1px rgba(255,255,255,.6); }
+  .tag.warn { background: var(--chip-yellow); color: #2a2a1a; } .tag.bad { background: #ff3d12; color: #fff; }
+  .srv { border-top: 1px solid rgba(255,255,255,.15); padding: 14px 0; }
+  .srv:first-of-type { border-top: 0; }
+  .srv .head { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .srv .head b { font-family: var(--font-wide); font-weight: 400; letter-spacing: .2em; font-size: 14px; }
+  .srv .url { color: rgba(242,242,242,.6); font-size: 12px; word-break: break-all; }
+  .tools { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 6px 16px; margin: 12px 0 4px; }
+  .tools label { display: flex; gap: 8px; font-size: 12.5px; line-height: 1.35; align-items: flex-start; }
+  .tools small { display: block; color: rgba(242,242,242,.55); font-size: 11px; }
+  .tools select { flex: none; font-size: 11px; padding: 3px 4px; width: 7.2em; }
+  .tools select:has(option[value="ask"]:checked) { border-color: #f0b43c; color: #f0b43c; }
+  .tools input[type=checkbox] { flex: none; width: 7.2em; visibility: hidden; }
+  .add { display: grid; grid-template-columns: 1fr 2fr; gap: 8px 10px; margin-top: 16px; padding-top: 16px; border-top: 1px solid rgba(255,255,255,.25); }
+  .add .wide { grid-column: 1 / -1; }
+  .toast { position: fixed; bottom: 18px; left: 50%; translate: -50% 0; background: #f4f4f4; color: #000; padding: 10px 16px; font-size: 13px; letter-spacing: .06em; z-index: 9; }
+  @media (max-width: 700px) { main { padding: 14px; } .add { grid-template-columns: 1fr; } header { padding: 12px 14px; } }
+</style>
+</head>
+<body>
+<header><span class="name" id="name">SAL</span><span class="num">9000</span><span>Settings</span>
+  <span style="margin-left:auto" class="meta" id="who"></span><a href="/monitor" id="back">Monitor</a></header>
+<main>
+  <div><h1>CONFIGURATION</h1>
+    <p class="sub">Changes take effect within a minute, on every monitor and eye, without a restart. Settings are kept in StackGen Incidents, so they
+      survive restarts. A value left at its default follows the deployment's configuration.</p></div>
+  <form id="general"></form>
+  <section class="f-tools" id="tools"></section>
+</main>
+<script type="module">
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+const toast = m => { const t = Object.assign(document.createElement('div'), { className: 'toast', textContent: m }); document.body.append(t); setTimeout(() => t.remove(), 3200); };
+const api = async (path, opts = {}) => {
+  const res = await fetch(path, { ...opts, headers: { 'Content-Type': 'application/json' }, body: opts.body && JSON.stringify(opts.body) });
+  if (res.status === 401) { location.href = `/auth/login?next=${encodeURIComponent(location.pathname)}`; throw new Error('sign in'); }
+  const d = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(d.error ?? res.statusText);
+  return d;
+};
+const room = new URLSearchParams(location.search).get('room');
+if (room) $('#back').href = `/monitor?room=${encodeURIComponent(room)}`;
+fetch('/auth/me').then(r => r.ok ? r.json() : {}).then(m => { if (m.name) $('#who').textContent = m.name; }).catch(() => {});
+
+const GROUPS = [['Mind', 'f-mind', 'MND'], ['Persona', 'f-persona', 'PRS'], ['Situation board', 'f-board', 'SIT'], ['Alerts', 'f-alerts', 'ALR'], ['Memory', 'f-memory', 'MEM'], ['Aiden', 'f-aiden', 'AID']];
+let S;
+
+async function load() {
+  S = await api('/api/settings');
+  $('#name').textContent = S.values['persona.defaultVoice'] === 'hal' ? 'HAL' : 'SAL';
+  renderGeneral(); renderTools();
+}
+
+function field(key, spec, value) {
+  const changed = spec.type === 'secret' ? false : value !== spec.default;
+  let input;
+  if (spec.type === 'choice') input = `<select name="${key}">${spec.choices.map(c => `<option ${c === value ? 'selected' : ''}>${c}</option>`).join('')}</select>`;
+  else if (spec.type === 'model') {
+    // The saved provider's models to pick from; any other id can be typed (e.g. for a provider not saved yet).
+    const opts = spec.when === S.values['mind.provider'] ? (S.models ?? []) : [];
+    input = `<input type="text" name="${key}" value="${esc(value)}" list="dl-${key.replace('.', '-')}" spellcheck="false" autocomplete="off">` +
+      `<datalist id="dl-${key.replace('.', '-')}">${opts.map(c => `<option value="${esc(c)}">`).join('')}</datalist>`;
+  } else if (spec.type === 'secret') {   // write-only: the server never sends a key back, only whether one is set
+    const set = S.secretsSet?.[key];
+    input = `<span class="unit"><input type="password" name="${key}" value="" placeholder="${set ? 'set · leave blank to keep' : 'not set'}" autocomplete="new-password" spellcheck="false">` +
+      `${set ? `<button type="button" class="clear-secret" data-key="${key}">Clear</button>` : ''}</span>`;
+  } else if (spec.type === 'text') input = `<input type="text" name="${key}" value="${esc(value)}" spellcheck="false" autocomplete="off">`;
+  else input = `<span class="unit"><input type="number" name="${key}" value="${value}" min="${spec.min}" max="${spec.max}" step="${spec.step ?? 1}">${spec.unit ? `<span>${spec.unit}</span>` : ''}</span>`;
+  return `<label class="set"${spec.when ? ` data-when="${spec.when}"` : ''}>${esc(spec.label)} ${input}
+    ${spec.type === 'secret' ? `<span class="default">${S.secretsSet?.[key] ? 'set' : 'not set'}</span>` : `<span class="default ${changed ? 'changed' : ''}">${changed ? 'changed · ' : ''}default ${esc(spec.default)}${spec.unit ? ' ' + spec.unit : ''}</span>`}${spec.help ? `<small>${esc(spec.help)}</small>` : ''}</label>`;
+}
+
+function renderGeneral() {
+  const byGroup = g => Object.entries(S.schema).filter(([, s]) => s.group === g);
+  $('#general').innerHTML = GROUPS.map(([g, cls, code]) => `<section class="${cls}"><h2><span class="code">${code}</span>${g.toUpperCase()}</h2>
+      <div class="grid">${byGroup(g).map(([k, s]) => field(k, s, S.values[k])).join('')}</div></section>`).join('') +
+    `<div class="bar"><button class="primary" ${S.canSave ? '' : 'disabled'}>Save settings</button><button type="button" id="reset">Reset to defaults</button>
+      <span class="meta">${S.stored?.updated_at ? `Last saved ${new Date(S.stored.updated_at).toLocaleString()} by ${esc(S.stored.updated_by)}` : 'All defaults'}${S.canSave ? '' : ' · settings store unavailable'}</span></div>`;
+  // Only the chosen provider's model, endpoint and key are shown.
+  const provider = $('#general [name="mind.provider"]');
+  const showProvider = () => $('#general').querySelectorAll('[data-when]').forEach(el => { el.hidden = el.dataset.when !== provider.value; });
+  if (provider) { provider.onchange = showProvider; showProvider(); }
+  $('#general').querySelectorAll('.clear-secret').forEach(b => b.onclick = () => {
+    const input = $(`#general [name="${b.dataset.key}"]`);
+    input.value = 'clear'; input.type = 'text'; input.readOnly = true; b.disabled = true; b.textContent = 'Cleared on save';
+  });
+  $('#general').onsubmit = async e => {
+    e.preventDefault();
+    const values = Object.fromEntries([...new FormData(e.target)].map(([k, v]) => [k, S.schema[k].type === 'number' ? Number(v) : v]));
+    await api('/api/settings', { method: 'PUT', body: { values } }).then(r => toast(`Saved. Every ship picks it up within a minute.${r.mind ? ` Mind: ${r.mind}.` : ''}`)).catch(err => toast(err.message));
+    load();
+  };
+  $('#reset').onclick = async () => {
+    if (!confirm('Reset every setting to its default?')) return;
+    await api('/api/settings', { method: 'PUT', body: { values: {} } }).then(() => toast('Back to defaults.')).catch(err => toast(err.message));
+    load();
+  };
+}
+
+// MCP servers: the 9000's built-in ones (from its deployment, read-only here) and the ones configured in settings,
+// shared with StackGen Incidents. Read-only tools are allowed by default; others have to be ticked.
+async function renderTools() {
+  const configured = await api('/api/mcp-servers').catch(err => { toast(err.message); return []; });
+  const live = new Map(S.mcp.map(s => [s.name, s]));
+  const builtin = S.mcp.filter(s => s.source === 'env');
+  // Each tool: off, use (offered to the model), or ask first (only in a plan a signed-in person approves).
+  const mode = (s, t) => ((s.approval ?? []).includes(t.name) ? 'ask' : (s.tools ? s.tools.includes(t.name) : t.readOnly) ? 'use' : 'off');
+  const state = s => { const l = live.get(s.name);
+    if (S.duplicates?.[s.name]) return `<span class="tag warn">duplicate of built-in ${esc(S.duplicates[s.name])} · not used</span>`;
+    return !s.enabled ? '<span class="tag off">off</span>' : l?.connected ? `<span class="tag on">connected · ${l.tools.length} tools in use</span>`
+      : s.last_test?.ok === false ? '<span class="tag bad">failed</span>' : '<span class="tag warn">connecting…</span>'; };
+  $('#tools').innerHTML = `<h2><span class="code">MCP</span>TOOLS · MCP SERVERS</h2>
+    <p class="sub" style="margin:0 0 6px">What the 9000 can look things up with. Servers added here are shared with StackGen Incidents (Settings → MCP servers).</p>
+    ${builtin.map(s => `<div class="srv"><div class="head"><b>${esc(s.name.toUpperCase())}</b><span class="tag ${s.connected ? 'on' : 'bad'}">${s.connected ? `built in · ${s.tools.length} tools` : 'built in · not connected'}</span>
+      <span class="url">${esc(s.url)}</span></div><div class="meta" style="margin-top:6px">${s.tools.map(esc).join(' · ') || 'no tools'} — set in the deployment, not editable here</div></div>`).join('')}
+    ${configured.map(s => `<div class="srv" data-id="${s.id}"><div class="head"><b>${esc(s.name.toUpperCase())}</b>${state(s)}<span class="url">${esc(s.url)}</span>
+        <span style="margin-left:auto" class="bar" style="margin:0"><button data-act="test">Test</button><button data-act="toggle">${s.enabled ? 'Turn off' : 'Turn on'}</button><button data-act="remove">Remove</button></span></div>
+      ${s.hint ? `<div class="meta" style="margin-top:6px">${esc(s.hint)}</div>` : ''}
+      ${s.last_test?.ok ? `<div class="tools">${s.last_test.tools.map(t => (s.internal ?? []).includes(t.name) ? `<label><input type="checkbox" disabled>
+          <span>${esc(t.name)} <span class="tag off">internal · the 9000's own code only</span><small>${esc(t.description)}</small></span></label>` : `<label><select data-tool="${esc(t.name)}" aria-label="${esc(t.name)}">${[['off', 'Off'], ['use', 'Use'], ['ask', 'Ask first']].map(([v, l]) => `<option value="${v}" ${mode(s, t) === v ? 'selected' : ''}>${l}</option>`).join('')}</select>
+          <span>${esc(t.name)} <span class="tag ${t.readOnly ? 'on' : 'warn'}">${t.readOnly ? 'read-only' : 'can change things'}</span><small>${esc(t.description)}</small></span></label>`).join('')}</div>
+        <div class="bar"><button class="primary" data-act="tools">Save tool choices</button><span class="meta">${s.tools ? `${s.tools.length} in use` : 'read-only tools in use (default)'}${s.approval?.length ? ` · ${s.approval.length} ask first` : ''}</span></div>`
+        : s.last_test ? `<div class="meta" style="margin-top:6px;color:#ffb4a0">${esc(s.last_test.error)}</div>` : ''}</div>`).join('')}
+    <form class="add" id="add">
+      <input name="name" required placeholder="NAME, E.G. K8S"><input name="url" required placeholder="https://…/mcp">
+      <input name="hname" placeholder="HEADER (OPTIONAL), E.G. AUTHORIZATION"><input name="hvalue" placeholder="HEADER VALUE (STORED, NEVER SHOWN AGAIN)" autocomplete="off">
+      <input class="wide" name="hint" placeholder="HINT FOR THE 9000 (OPTIONAL): WHAT THIS SERVER IS FOR">
+      <div class="wide bar" style="margin:0"><button class="primary">Add and test</button></div>
+    </form>`;
+  $('#add').onsubmit = async e => {
+    e.preventDefault();
+    const f = e.target, headers = f.hname.value.trim() ? { [f.hname.value.trim()]: f.hvalue.value } : {};
+    e.submitter.disabled = true; e.submitter.textContent = 'Connecting…';
+    const r = await api('/api/mcp-servers', { method: 'POST', body: { name: f.name.value, url: f.url.value, headers, hint: f.hint.value } }).catch(err => { toast(err.message); return null; });
+    if (r) toast(r.last_test?.ok ? `Added ${r.name}: ${r.last_test.tools.length} tools. The 9000 connects within a minute.` : `Added ${r.name}, but it didn't connect: ${r.last_test?.error ?? ''}`);
+    load();
+  };
+  for (const el of document.querySelectorAll('.srv[data-id]')) {
+    const id = el.dataset.id, s = configured.find(x => String(x.id) === id);
+    for (const b of el.querySelectorAll('[data-act]')) b.onclick = async () => {
+      const act = b.dataset.act;
+      if (act === 'remove' && !confirm(`Remove ${s.name}? The 9000 stops using it within a minute.`)) return;
+      b.disabled = true;
+      try {
+        if (act === 'test') { const r = await api(`/api/mcp-servers/${id}/test`, { method: 'POST' }); toast(r.ok ? `${s.name}: ${r.tools.length} tools.` : `${s.name}: ${r.error}`); }
+        if (act === 'toggle') await api(`/api/mcp-servers/${id}`, { method: 'PATCH', body: { enabled: !s.enabled } });
+        if (act === 'remove') await api(`/api/mcp-servers/${id}`, { method: 'DELETE' });
+        if (act === 'tools') {
+          const pick = v => [...el.querySelectorAll('[data-tool]')].filter(c => c.value === v).map(c => c.dataset.tool);
+          const tools = pick('use'), approval = pick('ask');
+          await api(`/api/mcp-servers/${id}`, { method: 'PATCH', body: { tools, approval } });
+          toast(`Saved: ${tools.length} in use, ${approval.length} ask first, for ${s.name}.`);
+        }
+      } catch (err) { toast(err.message); }
+      load();
+    };
+  }
+}
+load().catch(err => toast(err.message));
+</script>
+</body>
+</html>

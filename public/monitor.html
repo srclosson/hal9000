@@ -1,0 +1,1420 @@
+<!doctype html>
+<html lang="en" data-theme="sal">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#000000">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/icons/icon.svg">
+<title>9000 Monitor</title>
+<link rel="stylesheet" href="/base.css">
+<style>
+  body {
+    /* minmax(0, 1fr): without it the column grows to fit the transcript's full (unwrapped) text, so a long
+       reply made the page wider than the screen and phones zoomed out. */
+    /* The chat drawer has its own slot (bottom, left or right), so opening it shrinks the board instead of covering it. */
+    display: grid; height: 100dvh; overflow: hidden;
+    grid-template-columns: var(--chat-l, 0px) minmax(0, 1fr) var(--chat-r, 0px);
+    grid-template-rows: auto minmax(0, 1fr) var(--chat-b, 0px) auto;
+    grid-template-areas: "head head head" "cl main cr" "cb cb cb" "foot foot foot";
+    padding: max(10px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) max(10px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
+    gap: 0;
+  }
+  body > header { grid-area: head; margin-bottom: 10px; } body > main { grid-area: main; } body > footer { grid-area: foot; margin-top: 10px; }
+  /* Chrome stays quiet so the display fields carry the screen: monospaced, hairline, low contrast. */
+  header, footer { display: flex; align-items: center; gap: 16px; text-transform: uppercase; letter-spacing: .12em; font-family: var(--font-mono); }
+  header { font-size: clamp(11px, 1.4vw, 15px); }
+  .brand { font-family: var(--font-plate); font-weight: 700; display: flex; cursor: pointer; padding: 0; border: 0; background: none; }
+  .brand:focus-visible .num { background: #2a55d6; }
+  .brand span { padding: .25em .6em; }
+  .brand .name { background: #111; border: 1px solid #333; }
+  .brand .num { background: #1a3fae; }
+  .center { flex: 1; min-width: 0; display: flex; justify-content: center; align-items: center; gap: .5em; position: relative; }
+  .clock { min-width: 0; text-align: center; font-variant-numeric: tabular-nums; color: rgba(255,255,255,.7);
+           white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }   /* one line, even with a board title */
+
+  /* ---- view picker: the arrow after the clock ---- */
+  .views-btn { flex: none; background: none; border: 0; padding: .1em .35em; color: rgba(255,255,255,.75); cursor: pointer;
+               font-size: 1em; line-height: 1; box-shadow: inset 0 0 0 1px rgba(255,255,255,.25); }
+  .views-btn[aria-expanded="true"] { background: #f4f4f4; color: #000; box-shadow: none; }
+  .views-menu { position: absolute; top: calc(100% + .6em); left: 50%; translate: -50% 0; z-index: 30; min-width: min(26em, 90vw);
+                background: #000; box-shadow: inset 0 0 0 1px rgba(255,255,255,.35), 0 .8em 2em rgba(0,0,0,.8); padding: .35em; display: grid; }
+  .views-menu[hidden] { display: none; }
+  .views-menu button { display: flex; align-items: center; gap: 1em; width: 100%; text-align: left; background: none; border: 0;
+                       padding: .55em .7em; color: rgba(255,255,255,.85); cursor: pointer; letter-spacing: .08em; text-transform: uppercase; font-family: var(--font-mono); }
+  .views-menu button span:first-child { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .views-menu button span:last-child { font-family: var(--font-wide); font-size: .72em; letter-spacing: .16em; opacity: .6; }
+  .views-menu button[aria-selected="true"] { background: #f4f4f4; color: #000; }
+  .views-menu button:focus-visible { outline: 1px solid #fff; outline-offset: -1px; }
+  /* ---- the 9000 logo is the menu: voice, view, conversation, full screen, the eye, settings ---- */
+  .brand-wrap { position: relative; flex: none; }
+  .brand .caret { background: #1a3fae; padding-left: 0; font-family: var(--font-mono); font-weight: 400; opacity: .8; }
+  .brand[aria-expanded="true"] .name { background: #f4f4f4; color: #000; }
+  .brand-menu { left: 0; translate: none; min-width: min(20em, 90vw); }
+  .views-menu .voice { display: grid; grid-template-columns: 1fr 1fr; gap: .35em; padding: .25em .35em .45em; }
+  .views-menu .voice button { justify-content: center; box-shadow: inset 0 0 0 1px rgba(255,255,255,.3); font-family: var(--font-plate); font-weight: 700; letter-spacing: .2em; }
+  .views-menu .voice button span:first-child { flex: none; }
+  .views-menu .sep { height: 1px; background: rgba(255,255,255,.18); margin: .3em .35em; }
+  /* ---- footer: acknowledge the alarm; open incidents ---- */
+  .btn:disabled { opacity: .35; cursor: default; }
+  #ack:not(:disabled) { background: #ff2a12; color: #fff; box-shadow: none; animation: alarmBlink 1s steps(1, end) infinite; }
+  #ack.acked { background: none; color: #ffb0a6; box-shadow: inset 0 0 0 1px rgba(255,42,18,.6); animation: none; }
+  .ack-float { position: fixed; z-index: 25; right: max(16px, env(safe-area-inset-right)); bottom: max(16px, env(safe-area-inset-bottom));
+               background: #ff2a12; color: #fff; box-shadow: none; animation: alarmBlink 1s steps(1, end) infinite; display: none; }
+  body.focused .ack-float:not([hidden]), body.bare:not(.typing) .ack-float:not([hidden]) { display: block; }
+  /* ---- the plan card ---- */
+  .plan-card { position: fixed; z-index: 45; top: 50%; left: 50%; translate: -50% -50%; width: min(46em, calc(100vw - 32px)); max-height: calc(100dvh - 32px);
+               overflow-y: auto; background: #000; color: #f4f4f4; box-shadow: inset 0 0 0 1px rgba(255,255,255,.35), 0 1.5em 4em rgba(0,0,0,.9);
+               font-family: var(--font-mono); font-size: clamp(12px, 1.05vw, 15px); letter-spacing: .02em; }
+  .plan-card[hidden] { display: none; }
+  .plan-card .phead { display: flex; align-items: center; gap: 1em; padding: 1em 1.2em .8em; border-bottom: 1px solid rgba(255,255,255,.18); }
+  .plan-card .phead b { font-family: var(--font-wide); font-weight: 400; letter-spacing: .22em; background: #f0b43c; color: #000; padding: .25em .5em .2em .7em; }
+  .plan-card .phead span { flex: 1; text-transform: uppercase; letter-spacing: .1em; }
+  .plan-card .phead i { font-style: normal; opacity: .7; letter-spacing: .12em; text-transform: uppercase; font-size: .85em; }
+  .plan-card section { padding: .7em 1.2em; }
+  .plan-card h4 { margin: 0 0 .4em; font-weight: 400; font-size: .75em; letter-spacing: .16em; text-transform: uppercase; color: rgba(255,255,255,.5); }
+  .plan-card p { margin: 0; line-height: 1.45; }
+  .plan-card ol { margin: 0; padding-left: 1.6em; display: grid; gap: .6em; }
+  .plan-card li .tool { font-weight: 700; } .plan-card li .srv { opacity: .55; font-size: .85em; }
+  .plan-card li pre { margin: .3em 0 0; padding: .5em .7em; background: rgba(255,255,255,.07); white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; font-size: .85em; }
+  .plan-card li .st { font-size: .8em; letter-spacing: .12em; text-transform: uppercase; opacity: .7; }
+  .plan-card li .st.failed { color: #ff7a66; opacity: 1; } .plan-card li .st.done { color: #9fe0a0; opacity: 1; }
+  .plan-card .warn { color: #f0b43c; }
+  .plan-card .acts { display: flex; gap: .7em; padding: .9em 1.2em 1.2em; border-top: 1px solid rgba(255,255,255,.18); flex-wrap: wrap; align-items: center; }
+  .plan-card .acts button { font: inherit; letter-spacing: .14em; text-transform: uppercase; padding: .7em 1.1em; cursor: pointer; border: 0; }
+  .plan-card .approve { background: #f0b43c; color: #000; }
+  .plan-card .approve.armed { background: #ff2a12; color: #fff; }
+  .plan-card .reject, .plan-card .close, .plan-card .undo { background: none; color: #f4f4f4; box-shadow: inset 0 0 0 1px rgba(255,255,255,.4); }
+  .plan-card .acts small { flex-basis: 100%; opacity: .6; }
+  .plan-float { position: fixed; z-index: 25; left: max(16px, env(safe-area-inset-left)); bottom: calc(var(--footer-h, 56px) + 10px); background: #f0b43c; color: #000; box-shadow: none; }
+  body.focused .plan-float, body.bare .plan-float { bottom: max(16px, env(safe-area-inset-bottom)); }
+  .inc-wrap { position: relative; flex: none; }
+  #incBtn.open { box-shadow: inset 0 0 0 1px rgba(255,255,255,.7); color: #fff; }
+  #incBtn.major { box-shadow: inset 0 0 0 1px #f0b43c; color: #f0b43c; }
+  .inc-menu { top: auto; bottom: calc(100% + .6em); left: auto; right: 0; translate: none; min-width: min(30em, 90vw); }
+  .inc-menu a { display: flex; align-items: center; gap: 1em; padding: .55em .7em; color: rgba(255,255,255,.85); text-decoration: none;
+                letter-spacing: .06em; text-transform: none; font-family: var(--font-mono); }
+  .inc-menu a:hover, .inc-menu a:focus-visible, .views-menu button:hover { background: rgba(255,255,255,.1); outline: none; }
+  .inc-menu a b { font-family: var(--font-wide); font-weight: 400; letter-spacing: .14em; flex: none; }
+  .inc-menu a span { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .inc-menu a i { font-style: normal; opacity: .55; flex: none; font-size: .85em; }
+  .inc-menu .none { padding: .7em; color: rgba(255,255,255,.5); letter-spacing: .1em; }
+  /* Acknowledged: the alarm calms to a steady glow; the badge says who has it. */
+  html.alarm.acked body::after { animation: none; box-shadow: inset 0 0 0 2px rgba(255,42,18,.55); }
+  .alarm-badge.acked { animation: none; background: none; color: #ff7a66; box-shadow: inset 0 0 0 1px #ff2a12; }
+  .eye-status { display: flex; align-items: center; gap: .6em; color: #999; cursor: pointer; }
+  .eye-status::before { content: ''; width: .7em; height: .7em; border-radius: 50%; background: #444; }
+  .eye-status.on { color: #eee; }
+  .eye-status.on::before { background: var(--accent); box-shadow: 0 0 8px var(--accent); }
+
+  /* ---- alarm: an announced alert is firing ---- */
+  .alarm-badge { background: #ff2a12; color: #fff; padding: .25em .7em; font-weight: 700; letter-spacing: .14em;
+                 animation: alarmBlink 1s steps(1, end) infinite; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 40vw; }
+  .alarm-badge[hidden] { display: none; }
+  /* A red frame around the whole monitor, so the alarm shows in Single and bare modes too. */
+  html.alarm body::after { content: ''; position: fixed; inset: 0; pointer-events: none; z-index: 20;
+                           box-shadow: inset 0 0 0 4px #ff2a12; animation: alarmBlink 1s steps(1, end) infinite; }
+  @keyframes alarmBlink { 0% { opacity: 1; } 50% { opacity: .25; } }
+  @media (prefers-reduced-motion: reduce) { .alarm-badge, html.alarm body::after { animation: none; } }
+
+  /* ---- display grid ---- */
+  main { display: grid; gap: 10px; min-height: 0; grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(2, 1fr); }
+  main.single { grid-template-columns: 1fr; grid-template-rows: 1fr; }
+  @media (max-aspect-ratio: 1/1) { main:not(.single) { grid-template-columns: repeat(2, 1fr); grid-template-rows: repeat(3, 1fr); } }
+  /* Full mode: panels in rows that always fill the screen, whatever their number (see layoutRows): five become
+     three over two, with the bottom two wider. */
+  main.flow { display: flex; flex-direction: column; }
+  main.flow > .prow { flex: 1 1 0; display: flex; gap: 10px; min-height: 0; }
+  main.flow > .prow > * { flex: 1 1 0; min-width: 0; }
+  .screen { position: relative; min-height: 0; border: 1px solid #222; background: #000; overflow: hidden; cursor: pointer; }
+
+  /* Single layout: one system takes over the whole monitor, as on Discovery: no header, no console. */
+  /* The page grid has four rows (header, board, drawer, footer): these keep the board row the one that fills. */
+  body.focused { grid-template-rows: 0 minmax(0, 1fr) 0 0; padding: 0; }
+  body.focused header, body.focused footer { display: none; }
+  body.focused .screen { border: 0; }
+
+  /* Bare Full mode ('h'): just the six panels. The console reappears while typing ('/'). */
+  body.bare:not(.focused) { grid-template-rows: 0 minmax(0, 1fr) var(--chat-b, 0px) 0; }
+  body.bare:not(.focused).typing { grid-template-rows: 0 minmax(0, 1fr) var(--chat-b, 0px) auto; }
+  body.bare header { display: none; }
+  body.bare:not(.typing) footer { display: none; }
+
+  /* ---- Simple view: letters-only panels (or Grafana-style stat panels for systems with a stat()) ---- */
+  .stat {
+    position: relative; min-height: 0; overflow: hidden; cursor: pointer; color: #fff;
+    display: grid; grid-template-rows: auto 1fr; padding: clamp(8px, 1.2vw, 16px);
+    background: var(--c);
+    container-type: size;
+  }
+  /* Keyboard selection in Full mode; shown only once the keyboard is in use. */
+  body.kbd main:not(.single) > .selected { outline: 4px solid #fff; outline-offset: -4px; filter: brightness(1.12); }
+  .stat .head { display: flex; align-items: baseline; gap: .7em; letter-spacing: .14em; text-transform: uppercase; position: relative; z-index: 1; }
+  .stat .head b { font-size: clamp(12px, 7cqh, 28px); }
+  .stat .head span { font-size: clamp(9px, 4cqh, 14px); opacity: .8; }
+  .stat .val {
+    position: relative; z-index: 1; align-self: center; justify-self: center; text-align: center;
+    font-weight: 500; font-variant-numeric: tabular-nums; line-height: 1;
+    font-size: min(26cqh, 17cqw);
+  }
+  .stat .val small { display: block; font-size: .3em; letter-spacing: .16em; margin-top: .35em; opacity: .85; }
+  /* ---- Discovery display language (after the film's cockpit screens) ----
+     Muted solid fields; small extended-face codes with a tiny monospaced label; white hairline graphics;
+     health shown by inverted tags and indicator chips, never by repainting the field. */
+  .stat.letters { grid-template-rows: 1fr; padding: 0; }
+  .stat.letters .plate { align-self: center; justify-self: center; display: grid; justify-items: center; gap: 1.6cqh; text-align: center; }
+  .stat.letters .label {
+    font-family: var(--font-mono); font-size: clamp(8px, 3.4cqh, 14px); letter-spacing: .12em; text-transform: uppercase;
+    color: rgba(255,255,255,.72); max-width: 80cqw; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .stat.letters .code {
+    font-family: var(--font-wide); font-weight: 400; line-height: 1; color: #fff;
+    font-size: min(17cqh, 11cqw); letter-spacing: .42em; margin-right: -.42em;   /* spacing without shifting centre */
+  }
+  .stat.letters .tags { display: flex; gap: .6em; min-height: 1.6em; font-size: clamp(8px, 3.6cqh, 15px); }
+
+  /* Tags: inverted box (white field, text in the panel colour), yellow chip, outline. */
+  .tag-inv, .chip, .tag-out { font-family: var(--font-wide); letter-spacing: .16em; padding: .28em .7em .22em; line-height: 1.1; text-transform: uppercase; }
+  .tag-inv { background: #f4f4f4; color: var(--c, #18204a); }
+  .chip { background: var(--chip-yellow); color: #2a2a1a; }
+  .tag-out { box-shadow: inset 0 0 0 1px rgba(255,255,255,.75); color: #fff; }
+  .tag-inv.blink { animation: tagBlink 1.6s ease-in-out infinite; }   /* CRITICAL: a subtle blink on the tag only */
+  @keyframes tagBlink { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+  @media (prefers-reduced-motion: reduce) { .tag-inv.blink { animation: none; } }
+  .stat.status-nodata { filter: saturate(.25) brightness(.8); }
+
+  /* Descriptive view: the graphics draw straight onto the field colour. */
+  .screen { background: var(--c, #000) !important; }
+  .stat canvas { position: absolute; left: 0; right: 0; bottom: 0; width: 100%; height: 38%; }
+  .screen canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+  /* Descriptive header: the code as an inverted box, the title in monospace, health tag on the right. */
+  .screen .tag {
+    position: absolute; left: .9em; top: .9em; right: .9em; z-index: 1; display: flex; align-items: center; gap: .9em;
+    font-size: clamp(10px, 1.35vw, 18px); pointer-events: none;
+  }
+  main.single .screen .tag { font-size: clamp(14px, 2.6vmin, 30px); }
+  .tag b { font-family: var(--font-wide); font-weight: 400; letter-spacing: .22em; padding: .28em .5em .22em .72em;
+           background: #f4f4f4; color: var(--c, #18204a); line-height: 1.1; }
+  .tag > span { font-family: var(--font-mono); text-transform: uppercase; letter-spacing: .12em; color: rgba(255,255,255,.8);
+              font-size: .78em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tag .health { margin-left: auto; font-size: 1em; font-style: normal; flex: none; }
+
+  /* Drilldown: a data panel's code is a button; it opens questions about that panel. */
+  .drillable { cursor: pointer; pointer-events: auto; position: relative; }
+  .drillable::after { content: '▾'; font-family: var(--font-mono); font-size: .6em; letter-spacing: 0; margin-left: .35em; opacity: .55; vertical-align: .15em; }
+  .drillable:focus-visible { outline: 1px solid #fff; outline-offset: 2px; }
+  .stat.letters .code.drillable::after { position: absolute; font-size: .28em; margin-left: .2em; }
+  .drill { position: fixed; z-index: 40; width: min(30em, calc(100vw - 32px)); background: #000; color: #f4f4f4;
+    box-shadow: 0 0 0 1px rgba(255,255,255,.35), 0 18px 60px rgba(0,0,0,.6); font-family: var(--font-mono); font-size: clamp(12px, 1.25vw, 15px); }
+  .drill[hidden] { display: none; }
+  .drill .dhead { display: flex; align-items: center; gap: .9em; padding: .9em 1em .7em; border-bottom: 1px solid rgba(255,255,255,.18); }
+  .drill .dhead b { font-family: var(--font-wide); font-weight: 400; letter-spacing: .22em; padding: .22em .45em .18em .65em; background: #f4f4f4; color: var(--c, #18204a); }
+  .drill .dhead span { text-transform: uppercase; letter-spacing: .12em; color: rgba(255,255,255,.75); font-size: .85em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .drill .main { display: block; width: calc(100% - 2em); margin: .9em 1em .5em; padding: .8em 1em .7em; border: 0; cursor: pointer;
+    background: #f4f4f4; color: #000; font-family: var(--font-wide); letter-spacing: .2em; font-size: .9em; text-transform: uppercase; text-align: left; }
+  .drill .main:focus-visible, .drill .q:focus-visible { outline: 1px solid #fff; outline-offset: 2px; }
+  .drill .q { display: flex; gap: .9em; width: 100%; padding: .55em 1em; border: 0; background: none; color: inherit; cursor: pointer;
+    font: inherit; text-align: left; line-height: 1.35; }
+  .drill .q i { font-style: normal; opacity: .45; flex: none; }
+  .drill .q:active, .drill .q.picked { background: rgba(255,255,255,.12); }
+  .drill .note { padding: .3em 1em .2em; font-size: .78em; letter-spacing: .14em; text-transform: uppercase; color: rgba(255,255,255,.45); }
+  .drill .note.busy::after { content: ' …'; animation: tagBlink 1.6s ease-in-out infinite; }
+  .drill form { padding: .6em 1em 1em; }
+  .drill .snz { display: flex; align-items: center; gap: .5em; padding: .7em 1em .9em; border-top: 1px solid rgba(255,255,255,.18); }
+  .drill .snz .note { padding: 0; margin-right: .3em; }
+  .drill .snz button { background: none; color: #f4f4f4; border: 1px solid rgba(255,255,255,.35); padding: .35em .7em; cursor: pointer; font: inherit; font-size: .85em; }
+  .drill .snz button:hover, .drill .snz button:focus-visible { background: #f4f4f4; color: #000; outline: none; }
+  .drill .impact { margin: .7em 1em .4em; line-height: 1.4; color: #f4f4f4; }
+  .drill .impact.quiet, .drill .src { color: rgba(255,255,255,.6); }
+  .drill .src { margin: .2em 1em .6em; font-size: .82em; line-height: 1.4; }
+  .drill .events { list-style: none; margin: .3em 1em .5em; padding: 0; max-height: 9.5em; overflow-y: auto; font-size: .8em; color: rgba(255,255,255,.75); }
+  .drill .events li { display: flex; gap: .8em; padding: .18em 0; }
+  .drill .events i { font-style: normal; flex: none; opacity: .55; font-family: var(--font-mono); }
+  .drill input { width: 100%; box-sizing: border-box; background: none; color: #fff; border: 0; border-bottom: 1px solid rgba(255,255,255,.35);
+    font: inherit; padding: .4em 0; outline: none; }
+
+  /* ---- transcript + console ---- */
+  footer { font-size: 12px; flex-wrap: wrap; }
+  .line { flex: 1 1 320px; min-width: 0; font-size: clamp(12px, 1.4vw, 16px); letter-spacing: .04em; text-transform: none; color: #e8e8e8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .line .who { font-family: var(--font-wide); background: #f4f4f4; color: #000; padding: .15em .5em .1em .62em; margin-right: .8em;
+               text-transform: uppercase; letter-spacing: .16em; font-size: .7em; vertical-align: .12em; }
+  form { display: flex; flex: 1 1 260px; }
+  form input { flex: 1; min-width: 0; background: #000; border: 0; box-shadow: inset 0 0 0 1px rgba(255,255,255,.28); padding: .7em .9em; letter-spacing: .04em; text-transform: none; }
+  form input:focus { outline: none; border-color: var(--accent); }
+  .btn { background: #000; border: 0; box-shadow: inset 0 0 0 1px rgba(255,255,255,.28); padding: .7em 1em; letter-spacing: .14em;
+         text-transform: uppercase; cursor: pointer; font-size: 11px; color: rgba(255,255,255,.8); }
+  .btn:focus-visible { box-shadow: inset 0 0 0 1px rgba(255,255,255,.8); color: #fff; outline: none; }
+  .btn[aria-pressed="true"] { background: #f4f4f4; color: #000; box-shadow: none; }   /* inverted, like a lit tag */
+  select.btn { appearance: none; }
+  a.btn { color: inherit; text-decoration: none; display: inline-flex; align-items: center; }
+
+  /* ---- chat drawer: the conversation as a thread, dragged up from the transcript line ---- */
+  footer { position: relative; }
+  .line { cursor: ns-resize; touch-action: none; user-select: none; }
+  .line::before { content: ''; position: absolute; left: 50%; top: -6px; width: 44px; height: 3px; translate: -50% 0;
+                  background: rgba(255,255,255,.28); }   /* the grip */
+  .chat { grid-area: cb; position: relative; min-width: 0; min-height: 0; margin-top: 10px; display: flex; flex-direction: column;
+          background: rgba(0,0,0,.92); box-shadow: inset 0 0 0 1px rgba(255,255,255,.18); }
+  .chat[data-dock="left"] { grid-area: cl; margin: 0 10px 0 0; }
+  .chat[data-dock="right"] { grid-area: cr; margin: 0 0 0 10px; }
+  .chat[hidden] { display: none; }
+  /* The grip: along the edge that faces the board. */
+  .chat .grip { position: absolute; z-index: 1; touch-action: none; display: grid; place-items: center; }
+  .chat[data-dock="bottom"] .grip { left: 0; right: 0; top: 0; height: 16px; cursor: ns-resize; }
+  .chat[data-dock="left"] .grip { top: 0; bottom: 0; right: 0; width: 14px; cursor: ew-resize; }
+  .chat[data-dock="right"] .grip { top: 0; bottom: 0; left: 0; width: 14px; cursor: ew-resize; }
+  .chat .grip::after { content: ''; background: rgba(255,255,255,.4); }
+  .chat[data-dock="bottom"] .grip::after { width: 44px; height: 3px; }
+  .chat:not([data-dock="bottom"]) .grip::after { width: 3px; height: 44px; }
+  .chat .docks { position: absolute; z-index: 2; top: 4px; right: 8px; display: flex; gap: 2px; }
+  .chat[data-dock="right"] .docks { right: auto; left: 20px; }
+  .chat .docks button { background: none; border: 0; color: rgba(255,255,255,.55); cursor: pointer; font: inherit; font-size: 14px; line-height: 1; padding: 4px 6px; }
+  .chat .docks button[aria-pressed="true"], .chat .docks button:hover { color: #fff; background: rgba(255,255,255,.12); }
+  .chat .thread { flex: 1; min-height: 0; overflow-y: auto; padding: 2em 1.2em 1em; display: flex; flex-direction: column; gap: .9em;
+                  font-size: clamp(13px, 1.25vw, 16px); letter-spacing: .02em; }
+  .chat .msg { max-width: min(46em, 78%); display: flex; flex-direction: column; gap: .35em; }
+  .chat .msg.you { align-self: flex-end; align-items: flex-end; }
+  .chat .meta { font-family: var(--font-mono); font-size: .68em; letter-spacing: .14em; text-transform: uppercase; color: rgba(255,255,255,.5); }
+  .chat .meta b { font-family: var(--font-wide); font-weight: 400; background: #f4f4f4; color: #000; padding: .12em .45em .08em .6em; margin-right: .6em; }
+  .chat .bubble { padding: .65em .9em; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .chat .you .bubble { background: #f4f4f4; color: #000; }
+  .chat .computer .bubble { box-shadow: inset 0 0 0 1px rgba(255,255,255,.28); color: #ececec; }
+  .chat .steps { list-style: none; margin: 0; padding: 0; font-family: var(--font-mono); font-size: .72em; letter-spacing: .08em; color: rgba(255,255,255,.5); }
+  .chat .steps li::before { content: '› '; }
+  .chat .chip { align-self: flex-start; background: none; color: #f4f4f4; border: 0; box-shadow: inset 0 0 0 1px rgba(255,255,255,.4);
+                padding: .35em .7em; font: inherit; font-family: var(--font-mono); font-size: .72em; letter-spacing: .12em; text-transform: uppercase; cursor: pointer; }
+  a.chip { text-decoration: none; display: inline-block; }
+  .chat details { margin-top: .5em; } .chat summary { cursor: pointer; font-family: var(--font-mono); font-size: .75em; letter-spacing: .12em; text-transform: uppercase; opacity: .7; }
+  .chat .chip:hover, .chat .chip:focus-visible { background: #f4f4f4; color: #000; outline: none; }
+  .chat .pending .bubble::after { content: ' …'; animation: tagBlink 1.6s ease-in-out infinite; }
+  .chat .empty { margin: auto; color: rgba(255,255,255,.45); font-family: var(--font-mono); font-size: .8em; letter-spacing: .16em; text-transform: uppercase; }
+  body.focused .chat { display: none; }
+  .chat:not([data-dock="bottom"]) .msg { max-width: 92%; }
+  /* While dragging: where letting go would dock it. */
+  body.dock-hint-left::before, body.dock-hint-right::before, body.dock-hint-bottom::before { content: ''; position: fixed; z-index: 40; pointer-events: none;
+    background: rgba(240,180,60,.18); box-shadow: inset 0 0 0 2px #f0b43c; }
+  body.dock-hint-left::before { left: 0; top: 0; bottom: 0; width: 30vw; } body.dock-hint-right::before { right: 0; top: 0; bottom: 0; width: 30vw; }
+  body.dock-hint-bottom::before { left: 0; right: 0; bottom: 0; height: 30vh; }
+
+  /* ---- pairing overlay ---- */
+  .pair {
+    position: fixed; inset: 0; z-index: 10; display: grid; place-items: center;
+    background: rgba(0,0,0,.86); backdrop-filter: blur(6px); text-align: center; padding: 16px;
+    text-transform: uppercase; letter-spacing: .16em;
+  }
+  .pair[hidden] { display: none; }
+  .pair h1 { font-family: var(--font-wide); font-weight: 400; font-size: clamp(16px, 2.6vw, 26px); margin: 0 0 .4em; }
+  .pair p { color: #aaa; font-size: 12px; margin: .4em 0; }
+  .pair img { width: min(44vh, 70vw); background: #fff; padding: 10px; margin: 18px 0 12px; image-rendering: pixelated; }
+  .pair .code { font-family: var(--font-wide); font-size: clamp(32px, 6vw, 64px); letter-spacing: .3em; color: var(--accent); margin: .1em 0 .2em .3em; }
+  .pair .url { text-transform: none; letter-spacing: .04em; color: #ddd; font-size: 13px; word-break: break-all; }
+  .pair .row { display: flex; gap: 10px; justify-content: center; margin-top: 18px; flex-wrap: wrap; }
+
+  /* ---- metric browser (n): metric names to drag onto a panel, or click to see one ---- */
+  body.browsing { padding-left: calc(var(--mb-w) + 14px); }
+  .metrics { --mb-w: min(320px, 80vw); position: fixed; z-index: 8; left: 0; top: 0; bottom: 0; width: var(--mb-w); display: flex; flex-direction: column;
+    background: #000; box-shadow: inset -1px 0 0 rgba(255,255,255,.25); font-family: var(--font-mono); font-size: 13px; letter-spacing: .02em; }
+  body { --mb-w: min(320px, 80vw); }
+  .metrics[hidden] { display: none; }
+  .metrics .mhead { display: flex; align-items: center; gap: .6em; padding: max(10px, env(safe-area-inset-top)) 12px 8px; text-transform: uppercase; letter-spacing: .14em; }
+  .metrics .mhead b { flex: 1; font-family: var(--font-wide); font-weight: 400; font-size: 12px; }
+  .metrics .mhead button { background: none; border: 0; color: rgba(255,255,255,.7); cursor: pointer; font: inherit; padding: .2em .4em; }
+  .metrics .mfilters { display: grid; gap: 6px; padding: 0 12px 8px; }
+  .metrics input, .metrics select { width: 100%; box-sizing: border-box; background: #0b0b0b; color: #f4f4f4; border: 0; box-shadow: inset 0 0 0 1px rgba(255,255,255,.3);
+    padding: .5em .6em; font: inherit; }
+  .metrics input:focus, .metrics select:focus { outline: none; box-shadow: inset 0 0 0 1px #fff; }
+  .metrics .mnote { padding: 0 12px 6px; color: rgba(255,255,255,.55); font-size: 11px; line-height: 1.4; }
+  .metrics ul { list-style: none; margin: 0; padding: 0 6px 12px; overflow: auto; flex: 1; min-height: 0; }
+  .metrics li { display: flex; align-items: baseline; gap: .6em; padding: .38em .5em; cursor: grab; color: rgba(255,255,255,.88); user-select: none; }
+  .metrics li:hover, .metrics li:focus-visible { background: #f4f4f4; color: #000; outline: none; }
+  .metrics li span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+  .metrics li i { font-style: normal; font-size: 10px; letter-spacing: .12em; text-transform: uppercase; opacity: .55; }
+  .metrics li.more { cursor: default; opacity: .55; }
+  .metrics li.more:hover { background: none; color: inherit; }
+  /* While a metric is dragged: every panel is a target; the one under the pointer says what a drop will do. */
+  body.dragging-metric main [data-code] { outline: 1px dashed rgba(255,255,255,.35); outline-offset: -1px; }
+  main [data-code].drop-here { outline: 2px solid #fff !important; outline-offset: -2px; position: relative; }
+  main [data-code].drop-here::after { content: attr(data-drop); position: absolute; left: 50%; top: 50%; translate: -50% -50%; z-index: 3; pointer-events: none;
+    background: #f4f4f4; color: #000; padding: .45em .8em; font-family: var(--font-mono); font-size: 13px; letter-spacing: .06em; text-transform: uppercase; white-space: nowrap; }
+
+  /* ---- hover tooltip (trends, events, changes, fixes) ---- */
+  #tip { position: fixed; z-index: 9; pointer-events: none; max-width: min(420px, 60vw); padding: 8px 10px 9px;
+    background: rgba(10, 10, 26, .92); border: 1px solid rgba(244,244,244,.35); color: #f4f4f4;
+    font: 12px/1.45 var(--font-mono, monospace); letter-spacing: .02em; }
+  #tip[hidden] { display: none; }
+  #tip b { display: block; font-family: var(--font-wide); font-weight: 400; font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: rgba(244,244,244,.7); margin-bottom: 4px; }
+  #tip div { display: flex; justify-content: space-between; gap: 18px; }
+  #tip div i { font-style: normal; }
+  #tip div.hero { color: #fff; font-weight: 600; }
+  #tip p { margin: 4px 0 0; color: rgba(244,244,244,.85); }
+</style>
+</head>
+<body>
+  <header>
+    <div class="brand-wrap">
+      <button class="brand" id="brand" aria-label="Menu" aria-haspopup="menu" aria-expanded="false"><span class="name" id="name">SAL</span><span class="num">9000</span><span class="caret">▾</span></button>
+      <div class="views-menu brand-menu" id="brandMenu" role="menu" hidden></div>
+    </div>
+    <div class="alarm-badge" id="alarm" hidden></div>
+    <div class="center">
+      <div class="clock" id="clock">MET 000:00:00:00</div>
+      <button class="views-btn" id="viewsBtn" aria-label="Choose a view ([ and ] step through)" aria-haspopup="listbox" aria-expanded="false">▾</button>
+      <div class="views-menu" id="viewsMenu" role="listbox" hidden></div>
+    </div>
+    <div class="eye-status" id="eyeStatus" aria-label="Show pairing code">Eye offline</div>
+  </header>
+
+  <main id="main"></main>
+
+  <footer>
+    <div class="line" id="line"><span class="who" data-computer>SAL</span>Awaiting input.</div>
+    <form id="ask"><input id="q" placeholder="Speak to SAL…" autocomplete="off"></form>
+    <button class="btn" id="ack" disabled title="Acknowledge the alarm: you have it (a)">Acknowledge</button>
+    <div class="inc-wrap">
+      <button class="btn" id="incBtn" aria-haspopup="menu" aria-expanded="false" title="Open incidents (i)">Incidents</button>
+      <div class="views-menu inc-menu" id="incMenu" role="menu" hidden></div>
+    </div>
+  </footer>
+
+  <div class="pair" id="pair" hidden>
+    <div>
+      <h1>Connect the eye</h1>
+      <p>Scan with your phone's camera</p>
+      <img id="qr" alt="QR code to open the eye on your phone">
+      <p>or open the address below and enter</p>
+      <div class="code" id="code"></div>
+      <div class="url" id="url"></div>
+      <div class="row">
+        <button class="btn" id="addMonitor">Copy link for another monitor</button>
+        <button class="btn" id="closePair">Close</button>
+      </div>
+    </div>
+  </div>
+
+<!-- The plan card: a fix the 9000 proposed, with the exact calls it will make. Approving takes two clicks. -->
+<div class="plan-card" id="planCard" role="dialog" aria-label="Proposed plan" hidden></div>
+<button class="btn plan-float" id="planFloat" hidden>Plan waiting · review (P)</button>
+<!-- Acknowledge, where the footer is hidden (a panel full screen, a story tour, bare mode). -->
+<button class="btn ack-float" id="ackFloat" hidden>Acknowledge · A</button>
+<!-- Chat drawer: the ship's conversation as a thread. Drag the transcript line up (or press t) to open it. -->
+<div class="chat" id="chat" role="log" aria-label="Conversation" data-dock="bottom" hidden><div class="grip" id="chatGrip" title="Drag to resize, or to a side of the screen to dock it there · double-click to close"></div>
+  <div class="docks"><button data-dock="left" title="Dock left">◧</button><button data-dock="bottom" title="Dock at the bottom">⬓</button><button data-dock="right" title="Dock right">◨</button><button data-dock="close" title="Close (t)">✕</button></div>
+  <div class="thread" id="thread"></div></div>
+<!-- Metric browser (n): every metric name, for one cluster or all. Drag one onto a panel to ask the 9000 to add it
+     there; drop it anywhere else (or click it) to see it on its own. -->
+<aside class="metrics" id="metrics" aria-label="Metrics" hidden>
+  <div class="mhead"><b>Metrics</b><span id="mCount"></span><button id="mClose" title="Close (n)">✕</button></div>
+  <div class="mfilters"><select id="mCluster" aria-label="Cluster"><option value="">All clusters</option></select>
+    <input id="mSearch" placeholder="Filter, e.g. error or ^http_" autocomplete="off" aria-label="Filter metrics"></div>
+  <div class="mnote">Drag a metric onto a panel to add it there, or anywhere else to see it on its own.</div>
+  <ul id="mList" role="listbox" aria-label="Metric names"></ul>
+</aside>
+<!-- Drilldown menu: top level, so it shows in every mode (the footer is hidden in Single mode). -->
+<div class="drill" id="drill" role="dialog" aria-label="Ask about this panel" hidden></div>
+<script type="module">
+import { connect, roomFromUrl, newRoomCode, registerSW, keepAwake, toggleFullscreen, autoHideCursor } from '/shared.js';
+import { DISPLAYS, refreshAccent, boardPanel, eyeFrame } from '/displays.js';
+
+registerSW();
+keepAwake();
+autoHideCursor();
+const $ = id => document.getElementById(id);
+
+// ---- room: create one if we're the first monitor ----
+const params = new URLSearchParams(location.search);
+let room = roomFromUrl();
+if (!room) { room = newRoomCode(); params.set('room', room); history.replaceState(null, '', `?${params}`); }
+
+// ---- what this monitor shows. Two settings, both kept in the URL:
+//   mode: Full (every system) or Single (one system, full screen, no header or console)
+//   view: Simple (just the three letters) or Descriptive (the animated graphic)
+// Full:   tap a panel -> Single (same view); 9000 logo or 'z' -> flip the view of every panel.
+// Single: tap -> flip Simple/Descriptive; 'q', 'x' or 'z' -> back to Full.
+// Esc is left to the browser (it leaves full screen), so no hotkey depends on it.
+// Keys (the 9000 had no mouse): 1-6 -> Single on that system, 0 -> Full; arrows move the selection
+// around the grid in Full (Enter/Space opens it) and step through systems in Single (Space flips view);
+// '/' types to the 9000; 'f' full screen; 'h' hides the header and console in Full mode.
+// Full requirements: docs/REQUIREMENTS.md.
+// Voice/typed commands ("return to the overview", "show navigation", "descriptive") arrive as 'display' messages.
+let single = (params.get('single') || '').toUpperCase();
+// The panels on screen: the ship's systems, or a live data board while one is up (see onBoard).
+let systems = DISPLAYS, board = null;
+window.__monitor = { panels: () => systems };   // for inspecting what a panel drew (hover zones, hits) from the console
+if (!systems.some(d => d.code === single)) single = null;
+let view = params.get('view') === 'descriptive' ? 'descriptive' : 'simple';
+
+function show(code, nextView) {
+  if (single && !code) selected = single;   // back in Full, the selection is the system you left
+  single = code; view = nextView;
+  params.delete('style');
+  code ? params.set('single', code) : params.delete('single');
+  params.set('view', view);
+  history.replaceState(null, '', `?${params}`);
+  build();
+}
+const flipView = () => show(single, view === 'simple' ? 'descriptive' : 'simple');
+
+let selected = single || systems[0].code;   // keyboard selection in Full mode
+
+// Bare: hide the header and console in Full mode too ('h'), for a pure wall of panels. Kept in the URL.
+let bare = params.get('bare') === '1';
+function setBare(on) {
+  bare = on;
+  document.body.classList.toggle('bare', bare);
+  on ? params.set('bare', '1') : params.delete('bare');
+  history.replaceState(null, '', `?${params}`);
+}
+setBare(bare);
+$('q').addEventListener('focus', () => document.body.classList.add('typing'));
+$('q').addEventListener('blur', () => document.body.classList.remove('typing'));
+
+// Arrow keys. Full: move spatially through the grid as laid out (3x2 landscape, 2x3 portrait),
+// left/right in reading order, up/down within the column, wrapping at the edges.
+// Single: step to the previous/next system, wrapping.
+function arrow(key) {
+  const n = systems.length;
+  const back = key === 'ArrowLeft' || key === 'ArrowUp';
+  if (single) {
+    const i = systems.findIndex(d => d.code === single);
+    show(systems[(i + (back ? -1 : 1) + n) % n].code, view);
+    return;
+  }
+  let i = systems.findIndex(d => d.code === selected);
+  if (key === 'ArrowLeft') i = (i - 1 + n) % n;
+  else if (key === 'ArrowRight') i = (i + 1) % n;
+  else {
+    // Up/down: the panel in the row above/below whose centre is nearest horizontally (rows may differ in length).
+    const els = [...$('main').querySelectorAll('[data-code]')], here = els.find(e => e.dataset.code === selected)?.getBoundingClientRect();
+    const cand = here && els.map(e => ({ code: e.dataset.code, r: e.getBoundingClientRect() }))
+      .filter(x => (key === 'ArrowUp' ? x.r.bottom <= here.top + 1 : x.r.top >= here.bottom - 1));
+    if (cand?.length) {
+      const rowY = key === 'ArrowUp' ? Math.max(...cand.map(x => x.r.top)) : Math.min(...cand.map(x => x.r.top));
+      const row = cand.filter(x => Math.abs(x.r.top - rowY) < 2), cx = here.left + here.width / 2;
+      i = systems.findIndex(d => d.code === row.sort((a, b) => Math.abs(a.r.left + a.r.width / 2 - cx) - Math.abs(b.r.left + b.r.width / 2 - cx))[0].code);
+    }
+  }
+  selected = systems[i].code;
+  markSelected();
+}
+
+function markSelected() {
+  for (const el of $('main').querySelectorAll('[data-code]')) el.classList.toggle('selected', !single && el.dataset.code === selected);
+}
+
+// How many panels per row so that n panels fill a W×H screen with cells as close as possible to a comfortable
+// shape (a little wider than tall). Earlier rows take the extra panel: 5 -> [3, 2], 7 -> [4, 3].
+function layoutRows(n, W, H) {
+  if (n <= 1) return [n];
+  const target = 1.25;
+  let best = null;
+  for (let rows = 1; rows <= n; rows++) {
+    const counts = Array.from({ length: rows }, (_, r) => Math.floor(n / rows) + (r < n % rows ? 1 : 0));
+    const err = counts.reduce((a, k) => a + k * Math.abs(Math.log((W / k) / (H / rows) / target)), 0) / n;
+    if (!best || err < best.err - 1e-9) best = { err, counts };
+  }
+  return best.counts;
+}
+let relayout;
+addEventListener('resize', () => { clearTimeout(relayout); relayout = setTimeout(() => { if (!single) build(); }, 250); });
+
+addEventListener('pointerdown', () => document.body.classList.remove('kbd'));
+addEventListener('keydown', e => {
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  if (e.target.closest?.('input, select, textarea')) {
+    // Leave the text box, back to hotkeys: Enter on an empty box (works in full screen), or Esc.
+    if (e.key === 'Escape' || (e.key === 'Enter' && !e.target.value.trim())) { e.preventDefault(); e.target.blur(); }
+    return;
+  }
+  if ((e.key === 'x' || e.key === 'X' || e.key === 'Escape') && !$('pair').hidden) { $('pair').hidden = true; return; }
+  if (e.key === 'Escape' && !$('planCard').hidden) { togglePlanCard(false); return; }
+  if (e.key === 'Escape' && !$('chat').hidden) { setChat(0); return; }
+  if (e.key === 'Escape' && !$('metrics').hidden) { toggleMetrics(false); return; }
+  if (!$('drill').hidden) {   // drilldown open: 1-4 pick a question, Enter asks generally, Esc/q/x/d close
+    if (/^[1-9]$/.test(e.key)) { const b = $('drill').querySelectorAll('.q')[e.key - 1]; if (b) { e.preventDefault(); b.click(); } return; }
+    if (e.key === 'Enter') { e.preventDefault(); $('drill').querySelector('.main').click(); return; }
+    if (/^(Escape|q|Q|x|X|d|D)$/.test(e.key)) { e.preventDefault(); closeDrill(); return; }
+    if (e.key.length === 1) { $('drill').querySelector('input').focus(); return; }   // just start typing a question
+  }
+
+  const k = e.key;
+  let handled = true;
+  if (k === 'z' || k === 'Z') single ? show(null, view) : flipView();
+  else if (/^[qxQX]$/.test(k)) single ? show(null, view) : (handled = false);
+  else if (k === '0') show(null, view);
+  else if (/^[1-9]$/.test(k) && systems[k - 1]) show(systems[k - 1].code, view);
+  else if (k.startsWith('Arrow')) arrow(k);
+  else if (k === 'Enter' || k === ' ') single ? flipView() : show(selected, view);
+  else if (k === '/' && !single) { document.body.classList.add('typing'); $('q').focus(); }   // reveal the console first in bare mode
+  else if (k === 'f' || k === 'F') toggleFullscreen();
+  else if (k === '[' || k === ']') stepView(k === ']' ? 1 : -1);   // back / forward through the views
+  else if (k === 'v' || k === 'V') toggleViewsMenu();
+  else if (k === ',') location.href = `/settings?room=${room}`;   // settings
+  else if (k === 'd' || k === 'D') drillCurrent();   // drill down on the open (or selected) panel
+  else if ((k === 's' || k === 'S') && systems.find(d => d.code === (single || selected))?.board) conn.snooze(single || selected, 240);   // snooze it for 4 hours
+  else if ((k === 'h' || k === 'H') && !single) setBare(!bare);
+  else if ((k === 't' || k === 'T') && !single) toggleChat();   // the conversation, as a thread
+  else if (k === 'a' || k === 'A') { if (ship.state.alarm && !ship.state.alarm.ack) conn.ack(); }   // acknowledge the alarm
+  else if ((k === 'i' || k === 'I') && !single) toggleIncMenu();
+  else if (k === 'm' || k === 'M') toggleBrandMenu();
+  else if (k === 'n' || k === 'N') toggleMetrics();   // the metric browser
+  else if (k === 'p' || k === 'P') { if (ship.state.plan) togglePlanCard(); }
+  else handled = false;
+
+  if (handled) e.preventDefault();   // no page scroll on Space/arrows
+  if (k.startsWith('Arrow')) document.body.classList.add('kbd');   // show the selection once navigating
+});
+
+let screens = [], stats = [], lastStat = -1e9;
+const history60 = new Map(DISPLAYS.map(d => [d.code, []]));   // sparkline samples per system
+
+// Health as the film's screens show it: an inverted CRIT box (with a subtle blink), a yellow CAUTION chip, or an
+// outlined NON FUNCTION tag. Normal shows nothing.
+// baseline (situation board): a warning that was just as bad yesterday shows as CHRONIC (known, not urgent) instead
+// of CAUTION; a problem that is new since yesterday gets a NEW tag beside its health.
+function statusTag(status, baseline) {
+  if (baseline === 'chronic' && status === 'warn') return '<span class="tag-out">CHRONIC</span>';
+  const tag = { crit: '<span class="tag-inv blink">CRIT</span>', warn: '<span class="chip">CAUTION</span>',
+    nodata: '<span class="tag-out">NON FUNCTION</span>' }[status] ?? '';
+  return tag + (tag && baseline === 'new' ? ' <span class="tag-out">NEW</span>' : '') + (status === 'crit' && baseline === 'chronic' ? ' <span class="tag-out">CHRONIC</span>' : '');
+}
+const escapeHtml = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+
+function panel(d) {
+  const el = document.createElement('div');
+  el.style.setProperty('--c', d.color);
+  el.dataset.code = d.code;
+  if (view === 'simple' && !d.stat) {
+    el.className = 'stat letters';
+    el.innerHTML = `<div class="plate"><div class="label">${escapeHtml(d.title)}</div><div class="code">${d.code}</div><div class="tags">${d.board ? statusTag(d.data.status, d.data.baseline) : ''}</div></div>`;
+  } else if (view === 'simple') {
+    el.className = 'stat';
+    el.innerHTML = `<div class="head"><b>${d.code}</b><span>${d.title}</span></div><div class="val"></div><canvas></canvas>`;
+    stats.push({ d, val: el.querySelector('.val'), canvas: el.querySelector('canvas') });
+  } else {
+    el.className = 'screen';
+    el.innerHTML = `<div class="tag"><b>${d.code}</b><span title="${escapeHtml(d.title)}">${escapeHtml(d.title)}</span><i class="health">${d.board ? statusTag(d.data.status, d.data.baseline) : ''}</i></div><canvas></canvas>`;
+    screens.push({ d, canvas: el.querySelector('canvas') });
+    // A flow diagram's boxes and arrows open a drilldown about that service or call (traces, causes, dependencies);
+    // a change mark on a trend opens that change's card; a situation card's fix strip asks the 9000 to fix it.
+    const cv = el.querySelector('canvas');
+    const hitAt = e => {
+      const r = cv.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top, inside = h => x >= h.x0 && x <= h.x1 && y >= h.y0 && y <= h.y1;
+      return (d.data?.kind === 'flow' && (d.hits ?? []).find(inside)) || (d.markHits ?? []).find(inside) || (d.eventHits ?? []).find(inside) || (d.fixHit && inside(d.fixHit) ? d.fixHit : null);
+    };
+    // Hover: a crosshair on trends and a tooltip with what was true at that moment (displays.js tipAt), or the full
+    // text of an event, change or fix under the pointer.
+    cv.onpointermove = e => {
+      const hit = hitAt(e), r = cv.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
+      cv.style.cursor = hit ? 'pointer' : '';
+      d.hoverX = x; d.hoverY = y;
+      const tip = hit?.event ? { title: `${hhmm(hit.event.t)} · ${hit.event.source === 'traces' ? 'trace' : hit.event.source === 'logs' ? 'log' : 'note'}`,
+          rows: [], notes: [hit.event.text, ...(hit.event.riseDisplay ? [`the line moved ${hit.event.riseDisplay} in the minutes after`] : []), hit.event.traceId ? 'click to open the trace' : 'click to ask HAL about it'] }
+        : hit?.mark ? { title: `${hhmm(hit.mark.t)} · change`, rows: [], notes: [hit.mark.label, ...(hit.mark.impact ? [`then ${hit.mark.impact.display}`] : []), 'click for the change card'] }
+        : hit?.fix ? { title: `fix · ${hit.fix.effort}`, rows: [], notes: [hit.fix.text, `from ${hit.fix.basis}`, 'click to have HAL do it or explain it'] }
+        : (d.truncHits ?? []).find(h => x >= h.x0 && x <= h.x1 && y >= h.y0 && y <= h.y1) ? { title: 'in full', rows: [], notes: [(d.truncHits.find(h => x >= h.x0 && x <= h.x1 && y >= h.y0 && y <= h.y1)).full] }
+        : d.tipAt?.(x, y);
+      showTip(tip, e.clientX, e.clientY);
+    };
+    cv.onpointerleave = () => { d.hoverX = d.hoverY = NaN; showTip(null); };
+    cv.onclick = e => {
+      const hit = hitAt(e);
+      if (!hit) return;
+      e.stopPropagation();
+      if (hit.fix) return conn.ask(`Fix: ${d.title} — ${hit.fix.text} (${hit.fix.effort})`, d.code);
+      // An event on a trend: a trace opens as a waterfall; anything else is asked about, in the panel's context.
+      if (hit.event) {
+        const ev = hit.event, at = hhmm(ev.t);
+        return conn.ask(ev.traceId ? `Show me trace ${ev.traceId}` : `On ${d.title}: what does this ${ev.source === 'logs' ? 'log line' : 'event'} at ${at} tell us${ev.riseDisplay ? `, given the line moved ${ev.riseDisplay} after it` : ''}? "${ev.text}"`, d.code);
+      }
+      hit.mark ? openChange(d.code, hit.mark, e) : openDrill(d.code, null, hit, e);
+    };
+  }
+  if (d.board) {
+    el.classList.add(`status-${d.data.status}`);
+    // The code opens the drilldown; hovering the panel tells the 9000 which one is being looked at.
+    const codeEl = el.querySelector('.tag b, .head b, .code');
+    codeEl.classList.add('drillable');
+    codeEl.tabIndex = 0; codeEl.setAttribute('role', 'button'); codeEl.setAttribute('aria-label', `Ask about ${d.code}`);
+    codeEl.onclick = e => { e.stopPropagation(); d.data?.kind === 'plan' ? togglePlanCard() : openDrill(d.code, codeEl); };
+    el.onpointerenter = () => lookAt(d.code);
+  }
+  el.onclick = single ? flipView : () => show(d.code, view);
+  return el;
+}
+
+const hhmm = t => new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });   // the screen's own clock
+// The hover tooltip: one floating plate, in the monitors' type, never under the pointer's way.
+const tipEl = Object.assign(document.createElement('div'), { id: 'tip' });
+document.body.append(tipEl);
+function showTip(tip, cx, cy) {
+  if (!tip || (!tip.rows?.length && !tip.notes?.length)) { tipEl.hidden = true; return; }
+  tipEl.innerHTML = `<b>${escapeHtml(tip.title)}</b>` + (tip.rows ?? []).map(r => `<div class="${r.hero ? 'hero' : ''}"><span>${escapeHtml(r.label)}</span><i>${escapeHtml(r.value)}</i></div>`).join('') +
+    (tip.notes ?? []).map(n => `<p>${escapeHtml(n)}</p>`).join('');
+  tipEl.hidden = false;
+  const w = tipEl.offsetWidth, h = tipEl.offsetHeight;
+  tipEl.style.left = `${Math.min(innerWidth - w - 8, cx + 16)}px`;
+  tipEl.style.top = `${cy + h + 24 > innerHeight ? cy - h - 12 : cy + 18}px`;
+}
+
+function build() {
+  const main = $('main');
+  main.innerHTML = '';
+  document.body.classList.toggle('focused', !!single);
+  main.classList.toggle('single', !!single);
+  screens = []; stats = [];
+  const shown = single ? systems.filter(x => x.code === single) : systems;
+  main.classList.toggle('flow', !single);
+  if (single) main.append(panel(shown[0]));
+  else {
+    let i = 0;
+    for (const n of layoutRows(shown.length, main.clientWidth || innerWidth, main.clientHeight || innerHeight * .85)) {
+      const row = document.createElement('div');
+      row.className = 'prow';
+      for (const d of shown.slice(i, i + n)) row.append(panel(d));
+      main.append(row);
+      i += n;
+    }
+  }
+  markSelected();
+  lastStat = -1e9;   // fill the new stat panels straight away
+  if (single && systems.find(d => d.code === single)?.board) lookAt(single);
+  queueMicrotask(updateWatch);
+}
+
+// The eye's camera runs only while some monitor actually shows the EYE panel (Descriptive view, tab visible).
+let watching = false;
+let connReady = false;   // build() runs before the connection exists; updateWatch runs again once it does
+function updateWatch() {
+  if (!connReady) return;
+  const on = !document.hidden && view === 'descriptive' && systems.some(d => d.eye) && (!single || single === 'EYE');
+  if (on !== watching) { watching = on; conn.watch(on); }
+}
+document.addEventListener('visibilitychange', updateWatch);
+build();
+
+// ---- pairing ----
+const { host, pair } = await fetch('/api/lan').then(r => r.json()).catch(() => ({ host: location.host }));
+// With sign-in on, the QR code carries a 15-minute pass that signs the phone in as this monitor's person;
+// it is renewed every 10 minutes while the monitor is open.
+function showQr(pass) {
+  const eyeUrl = pass ? `${location.protocol}//${host}/auth/pair?t=${pass}&next=${encodeURIComponent(`/eye?room=${room}`)}`
+    : `${location.protocol}//${host}/eye?room=${room}`;
+  $('qr').src = `/qr.svg?data=${encodeURIComponent(eyeUrl)}`;
+}
+showQr(pair);
+if (pair) setInterval(() => fetch('/api/lan').then(r => r.json()).then(j => showQr(j.pair)).catch(() => {}), 10 * 60_000);
+$('code').textContent = room;
+$('url').textContent = `${location.protocol}//${host}/eye`;
+$('eyeStatus').onclick = () => $('pair').hidden = false;
+// Closing the pairing screen sticks: it won't pop back up when others join or leave the ship.
+$('closePair').onclick = () => { $('pair').hidden = true; eyeSeen = true; };
+$('addMonitor').onclick = async e => {
+  const link = `${location.protocol}//${host}/monitor?room=${room}`;
+  try { await navigator.clipboard.writeText(link); e.target.textContent = 'Copied'; }
+  catch { e.target.textContent = link; }
+};
+
+// ---- connection ----
+const ship = { state: {}, voice: new Array(120).fill(0) };
+const who = () => (ship.state.theme === 'hal' ? 'HAL' : 'SAL');
+// The speaker tag on the transcript line. The computer's own lines are marked so a HAL/SAL switch relabels them.
+function showLine(label, text, computer = false) {
+  $('line').innerHTML = '';
+  const w = document.createElement('span');
+  w.className = 'who'; w.textContent = label;
+  if (computer) w.dataset.computer = '';
+  $('line').append(w, text);
+  $('line').title = `${label}: ${text}`;   // the whole line on hover, when it is cut short (the chat drawer has it all too)
+}
+
+let eyeSeen = false;
+const conn = connect({
+  room, role: 'monitor',
+  onState: (s, patch) => {
+    if ('focus' in patch) followFocus(patch.focus);
+    if ('alarm' in patch || 'theme' in patch) {
+      document.documentElement.classList.toggle('alarm', !!s.alarm);
+      $('alarm').hidden = !s.alarm;
+      $('alarm').textContent = s.alarm ? `ALERT · ${s.alarm.title}${s.alarm.ack ? ` · ACK ${s.alarm.ack.by} ${clockOf(s.alarm.ack.at)}` : ''}` : '';
+      $('alarm').classList.toggle('acked', !!s.alarm?.ack);
+      document.documentElement.classList.toggle('acked', !!s.alarm?.ack);
+    }
+    ship.state = s;
+    document.documentElement.dataset.theme = s.theme;
+    refreshAccent();
+    $('name').textContent = who();
+    for (const w of document.querySelectorAll('#line .who[data-computer], #thread [data-computer]')) w.textContent = who();
+    $('q').placeholder = `Speak to ${who()}…`;
+    renderAlarmControls(s);
+    if ('plan' in patch) onPlan(s.plan);
+    if ('incidents' in patch || 'alarm' in patch) renderIncButton(s);
+    if (!$('brandMenu').hidden) renderBrandMenu();
+  },
+  onHeard: (text, about) => showLine(about ? `You · ${about}` : 'You', text),
+  onDrill: msg => renderDrill(msg),
+  onBoard: b => showBoard(b),
+  onViews: (list, current) => { views = list; currentView = current; renderViewsMenu(); },
+  onActivity: text => { showLine('NET', text + '…'); chatPending(text); },   // a tool is running (e.g. web search)
+  onDisplay: cmd => show(cmd.single !== undefined ? cmd.single : single, cmd.view || view),
+  onSay: (text, parts) => {   // shown even when no eye is connected to speak it
+    // A story tour's narration, per panel: how long the 9000 will talk about each, for replaying it (followFocus).
+    for (const p of parts ?? []) if (p.focus) narration.set(p.focus, `${narration.get(p.focus) ?? ''} ${p.text}`);
+    showLine(who(), text, true);
+  },
+  onChat: msg => (msg.history ? renderChat(msg.history) : addChat(msg.entry)),
+  onFrame: blob => eyeFrame(blob, ship),
+  onStatus: st => { if (st === 'online' && watching) conn.watch(true); },   // a reconnected server has forgotten
+  onRoster: roster => {
+    const eye = roster.some(c => c.role === 'eye');
+    ship.eyePresent = eye;
+    $('eyeStatus').classList.toggle('on', eye);
+    $('eyeStatus').textContent = eye ? 'Eye connected' : 'Eye offline';
+    // Show pairing until the eye first connects; after that, only on request.
+    if (eye) { $('pair').hidden = true; eyeSeen = true; }
+    else if (!eyeSeen) $('pair').hidden = false;
+  },
+});
+connReady = true;
+updateWatch();
+
+$('ask').onsubmit = e => { e.preventDefault(); const q = $('q').value.trim(); if (q) conn.ask(q); $('q').value = ''; };
+
+// ---- chat drawer ----
+// The conversation as a thread, in its own slot beside the board: docked at the bottom, or on the left or right (where
+// a square board leaves room on a wide monitor). The board shrinks to make room. Drag the transcript line up to open it
+// at the bottom; drag its grip to resize, or to a side of the screen (or back to the bottom) to dock it there; the
+// buttons in its corner dock it too. Click the line (or press t) to open or close it. Each monitor remembers its dock and
+// size. The thread comes from the server, so every monitor in the ship shows the same conversation.
+const CHAT_KEY = 'hal9000.chat';
+let chatMsgs = [], chatSnap = 0, dock = 'bottom';
+try { dock = JSON.parse(localStorage.getItem(CHAT_KEY))?.dock ?? 'bottom'; } catch {}
+const footerH = () => document.querySelector('footer').getBoundingClientRect().height + 10;
+const boardTop = () => $('main').getBoundingClientRect().top;
+// Most a drawer may take: the board keeps at least 160 px of height, or 30% of the width.
+const chatMax = () => (dock === 'bottom' ? Math.max(160, innerHeight - boardTop() - footerH() - 160) : innerWidth * .7);
+const chatMin = () => (dock === 'bottom' ? 90 : 240);
+// A side drawer's natural width: what a square board leaves over (at least 300 px, at most half the screen).
+const sideDefault = () => Math.min(innerWidth * .5, Math.max(300, innerWidth - (innerHeight - boardTop() - footerH()) - 24));
+function setChat(size, remember = true) {
+  size = size < chatMin() ? 0 : Math.min(size, chatMax());
+  const root = document.documentElement.style;
+  for (const [side, v] of [['b', 'bottom'], ['l', 'left'], ['r', 'right']]) root.setProperty(`--chat-${side}`, `${size && dock === v ? size : 0}px`);
+  $('chat').dataset.dock = dock;
+  $('chat').hidden = !size;
+  for (const b of $('chat').querySelectorAll('.docks [data-dock]')) b.setAttribute('aria-pressed', String(b.dataset.dock === dock));
+  chatSnap = size;
+  if (remember && size) try { localStorage.setItem(CHAT_KEY, JSON.stringify({ dock, pct: Math.round(size / chatMax() * 100) })); } catch {}
+  if (size) scrollChat(true);
+}
+function openChat() {
+  let pct = null;
+  try { const st = JSON.parse(localStorage.getItem(CHAT_KEY)); if (st?.dock === dock) pct = st.pct; } catch {}
+  setChat(pct ? chatMax() * pct / 100 : dock === 'bottom' ? chatMax() / 3 : sideDefault());
+}
+const toggleChat = () => (chatSnap ? setChat(0, false) : openChat());
+function dockChat(where) {
+  if (where === 'close') return setChat(0, false);
+  dock = where;
+  setChat(where === 'bottom' ? chatMax() / 3 : sideDefault());
+}
+for (const b of $('chat').querySelectorAll('.docks [data-dock]')) b.onclick = e => { e.stopPropagation(); dockChat(b.dataset.dock); };
+
+// Dragging. From the transcript line it opens (or resizes) the bottom drawer; from the grip it resizes the drawer where
+// it is docked. Letting go near the left or right edge docks it there; near the bottom edge, back at the bottom.
+const EDGE = 70;
+const dropZone = (x, y) => (x < EDGE ? 'left' : x > innerWidth - EDGE ? 'right' : y > innerHeight - EDGE ? 'bottom' : null);
+function chatDrag(handle, fromLine) {
+  handle.addEventListener('pointerdown', e => {
+    if (e.button) return;
+    const x0 = e.clientX, y0 = e.clientY;
+    if (fromLine && dock !== 'bottom' && chatSnap) { dock = 'bottom'; setChat(0, false); }   // the line always works from the bottom
+    const size0 = chatSnap;
+    let moved = false;
+    handle.setPointerCapture(e.pointerId);
+    const sizeAt = ev => size0 + (dock === 'bottom' ? y0 - ev.clientY : dock === 'left' ? ev.clientX - x0 : x0 - ev.clientX);
+    const hint = zone => { for (const z of ['left', 'right', 'bottom']) document.body.classList.toggle(`dock-hint-${z}`, zone === z && zone !== dock); };
+    const move = ev => {
+      if (Math.abs(ev.clientX - x0) + Math.abs(ev.clientY - y0) > 6) moved = true;
+      if (!moved) return;
+      setChat(Math.max(0, sizeAt(ev)), false);
+      hint(dropZone(ev.clientX, ev.clientY));
+    };
+    const up = ev => {
+      handle.removeEventListener('pointermove', move); handle.removeEventListener('pointerup', up);
+      hint(null);
+      if (!moved) return toggleChat();
+      const zone = dropZone(ev.clientX, ev.clientY);
+      if (zone && zone !== dock && (zone !== 'bottom' || dock !== 'bottom')) return dockChat(zone);
+      const size = Math.max(0, sizeAt(ev));
+      if (dock !== 'bottom') return setChat(size);
+      const max = chatMax();
+      setChat([0, max / 3, max * .66, max].reduce((a, b) => (Math.abs(b - size) < Math.abs(a - size) ? b : a)));
+    };
+    handle.addEventListener('pointermove', move); handle.addEventListener('pointerup', up);
+  });
+}
+chatDrag($('line'), true); chatDrag($('chatGrip'), false);
+$('chatGrip').ondblclick = () => setChat(0, false);
+addEventListener('resize', () => { if (chatSnap) setChat(Math.min(chatSnap, chatMax()), false); });
+// The board re-lays itself out for the space the drawer leaves (panels per row, sizes).
+let boardSize = '', relayoutTimer;
+new ResizeObserver(([e]) => {
+  const size = `${Math.round(e.contentRect.width)}x${Math.round(e.contentRect.height)}`;
+  if (size === boardSize) return;
+  boardSize = size;
+  clearTimeout(relayoutTimer);
+  relayoutTimer = setTimeout(() => { if (!single) build(); }, 120);
+}).observe($('main'));
+
+const atBottom = () => { const t = $('thread'); return t.scrollHeight - t.scrollTop - t.clientHeight < 40; };
+function scrollChat(force) { const t = $('thread'); if (force || atBottom()) t.scrollTop = t.scrollHeight; }
+const clockOf = at => new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+function chatEl(m) {
+  const el = document.createElement('div');
+  el.className = `msg ${m.from}`;
+  const name = m.from === 'you' ? escapeHtml(m.by ?? 'You') : `<b data-computer>${who()}</b>${m.via ? ` from ${escapeHtml(m.via)}` : ''}`;
+  const how = m.from === 'you' ? [m.spoken ? 'spoken' : 'typed', m.about && `about ${escapeHtml(m.about)}`].filter(Boolean).join(' · ') : '';
+  el.innerHTML = `<div class="meta">${name}${how ? ` · ${how}` : ''} · ${clockOf(m.at)}</div>` +
+    (m.steps?.length ? `<ul class="steps">${m.steps.map(s => `<li>${escapeHtml(s)}</li>`).join('')}</ul>` : '') +
+    `<div class="bubble">${escapeHtml(m.text)}${m.full && m.full !== m.text ? `<details><summary>Full findings</summary>${escapeHtml(m.full)}</details>` : ''}</div>` +
+    (m.link ? `<a class="chip" href="${escapeHtml(m.link)}" target="_blank" rel="noopener">Open in ${escapeHtml(m.via ?? 'source')} ▸</a>` : '') +
+    (m.board ? `<button class="chip" type="button" data-view="${escapeHtml(m.board.id)}">${m.board.story ? 'Story' : 'Board'} · ${escapeHtml(m.board.title)} ▸</button>` : '');
+  el.querySelector('.chip')?.addEventListener('click', () => conn.view(m.board.id));
+  return el;
+}
+function renderChat(list) {
+  chatMsgs = list;
+  const t = $('thread');
+  t.innerHTML = list.length ? '' : '<div class="empty">No conversation yet</div>';
+  for (const m of list) t.append(chatEl(m));
+  scrollChat(true);
+}
+function addChat(m) {
+  if (!chatMsgs.length) $('thread').innerHTML = '';
+  chatMsgs.push(m);
+  if (m.from === 'computer') $('thread').querySelector('.pending')?.remove();
+  const stick = atBottom();
+  $('thread').append(chatEl(m));
+  scrollChat(stick);
+}
+// While the 9000 works: a reply-in-progress bubble listing its steps, replaced by the reply.
+function chatPending(step) {
+  let p = $('thread').querySelector('.pending');
+  if (!p) {
+    if (!chatMsgs.length) $('thread').innerHTML = '';
+    p = document.createElement('div');
+    p.className = 'msg computer pending';
+    p.innerHTML = `<div class="meta"><b data-computer>${who()}</b> · working</div><ul class="steps"></ul><div class="bubble">Working on it</div>`;
+    $('thread').append(p);
+  }
+  const li = document.createElement('li'); li.textContent = step;
+  p.querySelector('.steps').append(li);
+  scrollChat(false);
+}
+
+// ---- the plan card ----
+// A fix the 9000 proposed: what is wrong, each exact call it will make (tool, server, arguments), what should change,
+// how it will be checked, the risk and the undo. It opens by itself when a new plan arrives. Approving takes two
+// clicks (the first arms it); the server only accepts it from a signed-in person, for exactly the plan shown (hash).
+let planSeen = null, armTimer = null;
+function onPlan(p) {
+  $('planFloat').hidden = !(p?.status === 'pending' && $('planCard').hidden);
+  if (p?.status === 'pending' && p.id !== planSeen) { planSeen = p.id; togglePlanCard(true); return; }
+  if (!$('planCard').hidden) renderPlanCard();
+}
+function renderPlanCard() {
+  const p = ship.state.plan;
+  if (!p) return togglePlanCard(false);
+  const pending = p.status === 'pending', mins = Math.max(0, Math.round((p.expiresAt - Date.now()) / 60_000));
+  const step = (s, i, live) => `<li><span class="tool">${escapeHtml(s.tool)}</span> <span class="srv">on ${escapeHtml(s.server ?? '?')}</span>${live && s.status !== 'pending' ? ` <span class="st ${s.status}">${s.status}</span>` : ''}
+      <p>${escapeHtml(s.why)}</p><pre>${escapeHtml(JSON.stringify(s.args, null, 1))}</pre>${live && s.result ? `<pre>${escapeHtml(s.result.slice(0, 400))}</pre>` : ''}</li>`;
+  $('planCard').innerHTML = `<div class="phead"><b>${escapeHtml(p.id)}</b><span>${escapeHtml(p.title)}</span><i>${escapeHtml(p.words)}</i></div>
+    <section><h4>The problem</h4><p>${escapeHtml(p.problem)}</p></section>
+    <section><h4>What will run, in order</h4><ol>${p.steps.map((s, i) => step(s, i, true)).join('')}</ol></section>
+    <section><h4>Expected</h4><p>${escapeHtml(p.expected)}</p>${p.verify ? `<p style="margin-top:.4em">Checked by <code>${escapeHtml(p.verify.query)}</code> going ${p.verify.expect} ${p.verify.value} within ${p.verify.minutes} min${p.verify.now !== null ? ` · now ${+Number(p.verify.now).toPrecision(3)}` : ''}.</p>` : '<p class="warn" style="margin-top:.4em">No automatic check: watch for it yourself.</p>'}</section>
+    <section><h4>Risk</h4><p class="${p.destructive ? 'warn' : ''}">${escapeHtml(p.risk)}${p.destructive ? ' Includes a destructive step.' : ''}</p></section>
+    ${p.undo?.length ? `<section><h4>Undo</h4><ol>${p.undo.map((s, i) => step(s, i, false)).join('')}</ol></section>` : '<section><h4>Undo</h4><p class="warn">None given: this cannot be reversed by the 9000.</p></section>'}
+    ${p.note ? `<section><h4>Note</h4><p>${escapeHtml(p.note)}</p></section>` : ''}
+    <div class="acts">${pending
+      ? `<button class="approve" type="button">Approve ${p.steps.length} step${p.steps.length > 1 ? 's' : ''}</button><button class="reject" type="button">Reject</button>`
+      : (['failed', 'unverified'].includes(p.status) && p.undo?.length ? '<button class="undo" type="button">Propose the undo</button>' : '')}
+      <button class="close" type="button">Close</button>
+      <small>${pending ? `Runs only when a signed-in person approves. Expires in ${mins} min. Or say "approve the plan".` : p.decidedBy ? `${p.status === 'rejected' ? 'Rejected' : 'Approved'} by ${escapeHtml(p.decidedBy)}.` : ''}</small></div>`;
+  const ap = $('planCard').querySelector('.approve');
+  if (ap) ap.onclick = () => {
+    if (!ap.classList.contains('armed')) {   // first click arms it, for five seconds
+      ap.classList.add('armed'); ap.textContent = `Click again to run ${p.steps.length} step${p.steps.length > 1 ? 's' : ''}`;
+      clearTimeout(armTimer); armTimer = setTimeout(() => renderPlanCard(), 5000);
+      return;
+    }
+    clearTimeout(armTimer);
+    conn.plan(p.id, 'approve', p.hash);
+  };
+  $('planCard').querySelector('.reject')?.addEventListener('click', () => conn.plan(p.id, 'reject', p.hash));
+  $('planCard').querySelector('.undo')?.addEventListener('click', () => conn.plan(p.id, 'undo'));
+  $('planCard').querySelector('.close').onclick = () => togglePlanCard(false);
+}
+function togglePlanCard(open = $('planCard').hidden) {
+  if (open) renderPlanCard();
+  $('planCard').hidden = !open;
+  $('planFloat').hidden = !(!open && ship.state.plan?.status === 'pending');
+}
+$('planFloat').onclick = e => { e.stopPropagation(); togglePlanCard(true); };
+
+// ---- the logo menu ----
+// Voice (HAL or SAL), Simple / Descriptive, the conversation, full screen, bare mode, the eye, settings.
+function renderBrandMenu() {
+  const theme = ship.state.theme === 'hal' ? 'hal' : 'sal';
+  const item = (id, label, key) => `<button role="menuitem" data-act="${id}"><span>${label}</span><span>${key ?? ''}</span></button>`;
+  $('brandMenu').innerHTML =
+    `<div class="voice">${['hal', 'sal'].map(t => `<button role="menuitemradio" aria-checked="${t === theme}" aria-selected="${t === theme}" data-voice="${t}"><span>${t.toUpperCase()}</span></button>`).join('')}</div>` +
+    item('view', view === 'simple' ? 'Descriptive view' : 'Simple view', 'Z') +
+    item('chat', chatSnap ? 'Close the conversation' : 'Conversation', 'T') +
+    item('full', document.fullscreenElement ? 'Leave full screen' : 'Full screen', 'F') +
+    item('bare', bare ? 'Show header and console' : 'Hide header and console', 'H') +
+    item('metrics', $('metrics').hidden ? 'Metrics' : 'Close metrics', 'N') +
+    '<div class="sep"></div>' +
+    item('eye', 'Connect the eye') +
+    item('settings', 'Settings', ',');
+  for (const b of $('brandMenu').querySelectorAll('[data-voice]')) b.onclick = () => { conn.set({ theme: b.dataset.voice }); };
+  for (const b of $('brandMenu').querySelectorAll('[data-act]')) b.onclick = () => {
+    toggleBrandMenu(false);
+    ({ view: flipView, chat: toggleChat, metrics: () => toggleMetrics(), full: toggleFullscreen, bare: () => setBare(!bare), eye: () => { $('pair').hidden = false; },
+       settings: () => { location.href = `/settings?room=${room}`; } })[b.dataset.act]();
+  };
+}
+function toggleBrandMenu(open = $('brandMenu').hidden) {
+  if (open) renderBrandMenu();
+  $('brandMenu').hidden = !open;
+  $('brand').setAttribute('aria-expanded', String(open));
+}
+$('brand').onclick = e => { e.stopPropagation(); toggleBrandMenu(); };
+addEventListener('pointerdown', e => { if (!e.target.closest('#brandMenu, #brand')) toggleBrandMenu(false); });
+
+// ---- acknowledge ----
+// Lit (and blinking) while an alarm is unacknowledged; then it says who has it. A press acknowledges for every ship.
+function renderAlarmControls(s) {
+  const a = s.alarm;
+  $('ack').disabled = !a || !!a.ack;
+  $('ack').classList.toggle('acked', !!a?.ack);
+  $('ack').textContent = a?.ack ? `Acked · ${a.ack.by.split(' ')[0]}` : 'Acknowledge';
+  $('ackFloat').hidden = !a || !!a.ack;
+  $('ack').title = a?.ack ? `${a.ack.by} acknowledged the ${a.title} alert at ${clockOf(a.ack.at)}` : a ? `Acknowledge the ${a.title} alert: you have it (a)` : 'Nothing is alarming';
+}
+$('ack').onclick = () => conn.ack();
+$('ackFloat').onclick = e => { e.stopPropagation(); conn.ack(); };
+
+// ---- incidents ----
+// The open incidents from StackGen Incidents: the button shows the alarm's own incident, else how many are open;
+// the menu lists them (each opens in Incidents) and offers to declare one for an alarm that has none.
+const SEV = n => `SEV${n}`;
+const age = t => { const m = Math.max(0, Math.round((Date.now() - Date.parse(t)) / 60_000)); return m < 60 ? `${m}m` : m < 2880 ? `${Math.round(m / 60)}h` : `${Math.round(m / 1440)}d`; };
+function renderIncButton(s) {
+  const inc = s.incidents, list = inc?.open ?? [], mine = s.alarm && list.find(i => i.alertUid === s.alarm.uid);
+  const b = $('incBtn');
+  b.textContent = mine ? `${mine.ref} · ${SEV(mine.severity)}` : list.length ? `${inc.total} incident${inc.total > 1 ? 's' : ''}` : 'No incidents';
+  b.classList.toggle('open', list.length > 0);
+  b.classList.toggle('major', list.some(i => i.severity <= 2));
+  if (!$('incMenu').hidden) renderIncMenu();
+}
+function renderIncMenu() {
+  const s = ship.state, inc = s.incidents, list = inc?.open ?? [], mine = s.alarm && list.find(i => i.alertUid === s.alarm.uid);
+  $('incMenu').innerHTML =
+    (list.length ? list.map(i => `<a role="menuitem" href="${escapeHtml(i.url)}" target="_blank" rel="noopener"><b>${escapeHtml(i.ref)}</b><span>${escapeHtml(i.title)}</span><i>${SEV(i.severity)} · ${escapeHtml(i.status)} · ${age(i.at)}${i.ackBy ? ` · ${escapeHtml(i.ackBy.split(' ')[0])}` : ''}</i></a>`).join('')
+      : '<div class="none">No open incidents</div>') +
+    '<div class="sep"></div>' +
+    (s.alarm && !mine ? `<button role="menuitem" data-declare><span>Declare an incident for ${escapeHtml(s.alarm.title)}</span><span></span></button>` : '') +
+    (inc?.home ? `<a role="menuitem" href="${escapeHtml(inc.home)}" target="_blank" rel="noopener"><span>Open StackGen Incidents</span><i>▸</i></a>` : '');
+  $('incMenu').querySelector('[data-declare]')?.addEventListener('click', () => { toggleIncMenu(false); conn.ask(`Open an incident for the ${s.alarm.title} alert.`); });
+}
+function toggleIncMenu(open = $('incMenu').hidden) {
+  if (open) renderIncMenu();
+  $('incMenu').hidden = !open;
+  $('incBtn').setAttribute('aria-expanded', String(open));
+}
+$('incBtn').onclick = e => { e.stopPropagation(); toggleIncMenu(); };
+addEventListener('pointerdown', e => { if (!e.target.closest('#incMenu, #incBtn')) toggleIncMenu(false); });
+
+// ---- view picker ----
+// The ship's views (situation board, ship systems, recent boards and stories) come from the server; picking one
+// asks the server to show it on every monitor in the ship. [ and ] step back and forward; v opens the list.
+let views = [], currentView = null;
+const KIND = { home: 'Home', systems: 'Systems', board: 'Board', story: 'Story' };
+
+function renderViewsMenu() {
+  const menu = $('viewsMenu');
+  menu.innerHTML = '';
+  for (const v of views) {
+    const b = document.createElement('button');
+    b.setAttribute('role', 'option');
+    b.setAttribute('aria-selected', String(v.id === currentView));
+    b.innerHTML = `<span></span><span>${KIND[v.kind] ?? ''}</span>`;
+    b.firstChild.textContent = v.title;
+    b.onclick = () => { conn.view(v.id); toggleViewsMenu(false); };
+    menu.append(b);
+  }
+}
+function toggleViewsMenu(open = $('viewsMenu').hidden) {
+  $('viewsMenu').hidden = !open;
+  $('viewsBtn').setAttribute('aria-expanded', String(open));
+}
+function stepView(dir) {
+  if (!views.length) return;
+  const i = Math.max(0, views.findIndex(v => v.id === currentView));
+  conn.view(views[(i + dir + views.length) % views.length].id);
+}
+$('viewsBtn').onclick = e => { e.stopPropagation(); toggleViewsMenu(); };
+addEventListener('pointerdown', e => { if (!e.target.closest('#viewsMenu, #viewsBtn')) toggleViewsMenu(false); });
+
+// ---- metric browser ----
+// The metric names Prometheus has (for one cluster or all), from /api/metrics. Dragging one onto a panel asks the
+// 9000 to work it into that panel (he decides how: rate a counter, match the panel's labels, a second axis…);
+// dropping it elsewhere, or clicking it, asks him to show it. The asking is a question like any other, in the
+// conversation, so the person sees what was asked and the 9000 answers it.
+const MAX_LISTED = 400;
+let metricNames = [], metricsCluster = '';
+async function loadMetrics() {
+  $('mCount').textContent = '…';
+  try {
+    const r = await fetch(`/api/metrics${metricsCluster ? `?cluster=${encodeURIComponent(metricsCluster)}` : ''}`);
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error ?? r.status);
+    metricNames = d.metrics;
+    const sel = $('mCluster');
+    if (sel.options.length <= 1) for (const c of d.clusters) sel.add(new Option(c, c));
+    sel.value = metricsCluster;
+  } catch (err) { metricNames = []; $('mList').innerHTML = `<li class="more">Metrics unavailable: ${escapeHtml(err.message)}</li>`; $('mCount').textContent = ''; return; }
+  renderMetrics();
+}
+function renderMetrics() {
+  const q = $('mSearch').value.trim();
+  let test = () => true;
+  if (q) { try { const re = new RegExp(q, 'i'); test = n => re.test(n); } catch { const t = q.toLowerCase(); test = n => n.toLowerCase().includes(t); } }
+  const hits = metricNames.filter(m => test(m.name));
+  $('mCount').textContent = hits.length;
+  const list = $('mList');
+  list.innerHTML = '';
+  for (const m of hits.slice(0, MAX_LISTED)) {
+    const li = document.createElement('li');
+    li.draggable = true; li.tabIndex = 0; li.setAttribute('role', 'option');
+    li.dataset.metric = m.name; li.dataset.kind = m.kind;
+    li.title = `${m.name} (${m.kind})\nDrag onto a panel to add it there · click or Enter to see it on its own`;
+    li.innerHTML = '<span></span><i></i>';
+    li.firstChild.textContent = m.name; li.lastChild.textContent = m.kind;
+    list.append(li);
+  }
+  if (hits.length > MAX_LISTED) list.insertAdjacentHTML('beforeend', `<li class="more">${hits.length - MAX_LISTED} more: type to narrow</li>`);
+}
+function toggleMetrics(open = $('metrics').hidden) {
+  if (open === !$('metrics').hidden) return;
+  $('metrics').hidden = !open;
+  document.body.classList.toggle('browsing', open);
+  if (!single) build();   // the board makes room for the list
+  if (open) { if (!metricNames.length) loadMetrics(); $('mSearch').focus(); }
+}
+$('mClose').onclick = () => toggleMetrics(false);
+$('mCluster').onchange = () => { metricsCluster = $('mCluster').value; loadMetrics(); };
+$('mSearch').oninput = () => renderMetrics();
+// Enter in the filter: the first match is shown; Enter or a click on a name shows that one.
+$('mSearch').onkeydown = e => { if (e.key === 'Enter' && e.target.value.trim()) { e.preventDefault(); e.stopPropagation(); $('mList').querySelector('li[data-metric]')?.focus(); } };
+const metricAsk = (name, kind) => `${name}${metricsCluster ? ` on cluster ${metricsCluster}` : ''} (a ${kind})`;
+function showMetric(li) { conn.ask(`Show me ${metricAsk(li.dataset.metric, li.dataset.kind)} as a trend.`); }
+$('mList').onclick = e => { const li = e.target.closest('li[data-metric]'); if (li) showMetric(li); };
+$('mList').onkeydown = e => {
+  const li = e.target.closest('li[data-metric]');
+  if (!li) return;
+  if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); showMetric(li); }
+  else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); e.stopPropagation(); (e.key === 'ArrowDown' ? li.nextElementSibling : li.previousElementSibling)?.focus?.(); }
+};
+
+// Drag and drop. The dragged metric travels as text/plain too, so it can be dropped into the question box.
+let dragged = null;
+$('mList').addEventListener('dragstart', e => {
+  const li = e.target.closest('li[data-metric]');
+  if (!li) return;
+  dragged = { name: li.dataset.metric, kind: li.dataset.kind };
+  e.dataTransfer.setData('text/plain', li.dataset.metric);
+  e.dataTransfer.effectAllowed = 'copy';
+  document.body.classList.add('dragging-metric');
+});
+const clearDrop = () => { for (const el of document.querySelectorAll('.drop-here')) el.classList.remove('drop-here'); };
+addEventListener('dragend', () => { dragged = null; clearDrop(); document.body.classList.remove('dragging-metric'); });
+// A board panel that charts numbers takes the metric in; anything else (a ship system, a situation card, a log, the
+// space between panels) shows it on its own.
+const TAKES_METRICS = ['timeseries', 'compose', 'stat', 'list', 'graph', 'bargauge'];
+const dropTarget = e => {
+  const el = e.target.closest?.('main [data-code]'), d = el && systems.find(x => x.code === el.dataset.code);
+  return { el, d: d?.board && TAKES_METRICS.includes(d.data?.kind) && d.data?.layout !== 'story' ? d : null };
+};
+$('main').addEventListener('dragover', e => {
+  if (!dragged) return;
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'copy';
+  const { el, d } = dropTarget(e);
+  if (el && !el.classList.contains('drop-here')) { clearDrop(); el.classList.add('drop-here'); }
+  if (el) el.dataset.drop = d ? `Add to ${d.code}` : 'Show on its own';
+});
+$('main').addEventListener('dragleave', e => { if (!e.relatedTarget || !$('main').contains(e.relatedTarget)) clearDrop(); });
+$('main').addEventListener('drop', e => {
+  if (!dragged) return;
+  e.preventDefault();
+  const { d } = dropTarget(e), m = dragged;
+  clearDrop();
+  if (d) conn.ask(`Add ${metricAsk(m.name, m.kind)} to ${d.code} "${d.title}": work it into that panel so the two can be read together, and tell me what it shows.`, d.code);
+  else conn.ask(`Show me ${metricAsk(m.name, m.kind)} as a trend.`);
+});
+
+// ---- story tours ----
+// While the 9000 narrates a story board, the eye announces which panel each sentence is about (state.focus).
+// The monitor zooms to that panel in Descriptive view, then returns to where it was when the tour ends.
+// ?follow=0 keeps this monitor where it is (e.g. one screen stays on the overview while another tours).
+const follow = params.get('follow') !== '0';
+let tourReturn = null;   // { single, view } to restore after the tour
+// A tour's narration per panel code, and replay: the focused panel's trends draw themselves while it is narrated, at
+// about 0.4 s a word (3 to 25 s).
+const narration = new Map();
+function replay(code) {
+  const d = systems.find(x => x.code === code), words = (narration.get(code) ?? '').trim().split(/\s+/).filter(Boolean).length;
+  if (!d || !words) return;
+  d.replay = { start: performance.now(), ms: Math.min(25_000, Math.max(3000, words * 400)) };
+  narration.delete(code);
+}
+function followFocus(code) {
+  if (code) replay(code);
+  if (!follow) return;
+  if (code && systems.some(d => d.code === code)) {
+    tourReturn ??= { single, view };
+    show(code, 'descriptive');
+  } else if (!code && tourReturn) {
+    const back = tourReturn;
+    tourReturn = null;
+    show(back.single, back.view);
+  }
+}
+
+// ---- live data boards ----
+// A board replaces the ship's systems until it's cleared. Refreshes with the same panels update values
+// and status in place (no rebuild, so nothing flickers); a different set of panels rebuilds the grid.
+// ---- drilldown: questions about one panel ----
+// Clicking a data panel's code (or pressing d) opens suggested questions: quick ones from the panel's data at once,
+// then the 9000's own sharper ones. Asking sends the question with the panel's code, so the answer is about it.
+let drillCode = null, drillPart = null, lookTimer = null;
+function lookAt(code) {   // the panel being looked at, so "why is that so high?" needs no explaining
+  clearTimeout(lookTimer);
+  lookTimer = setTimeout(() => conn.focus(code), 300);
+}
+// part: a box or arrow clicked on a flow diagram ({ kind: 'node', id, label } or { kind: 'edge', from, to, label }); at: the click.
+function openDrill(code, anchor, part = null, at = null) {
+  const d = systems.find(x => x.code === code);
+  if (!d?.board) return;
+  if (drillOpen(code, part ? partKey(part) : null)) return closeDrill();   // a second click on the same thing closes it
+  drillCode = code; drillPart = part ? partKey(part) : null;
+  const subject = part ? part.label : code;
+  const box = $('drill');
+  box.style.setProperty('--c', d.color);
+  box.innerHTML = `<div class="dhead"><b>${escapeHtml(code)}</b><span>${escapeHtml(part ? part.label : d.title)}</span></div>
+    ${d.data?.kind === 'aiden' && d.data.aiden?.url ? `<a class="main" href="${escapeHtml(d.data.aiden.url)}" target="_blank" rel="noopener">Open the investigation in Aiden ▸</a>` : ''}
+    <button class="main" type="button">Ask ${who()} about ${part ? escapeHtml(part.kind === 'edge' ? 'this call' : part.label) : 'this'} ▸</button>
+    <div class="note busy">Likely questions</div><div class="qs"></div>
+    <form><input placeholder="Or ask anything about ${escapeHtml(subject)}…" autocomplete="off" aria-label="Your question about ${escapeHtml(code)}"></form>
+    ${part ? '' : d.data?.snooze ? `<div class="snz"><span class="note">Snooze</span>${[[60, '1 hour'], [240, '4 hours'], [1440, '1 day']].map(([m, l]) =>
+        `<button type="button" data-snooze="${m}">${l}</button>`).join('')}</div>`
+      : board && !board.home ? '<div class="snz"><button type="button" data-snooze="240">Remove from the board</button></div>' : ''}`;
+  for (const b of box.querySelectorAll('[data-snooze]')) b.onclick = () => { conn.snooze(code, Number(b.dataset.snooze)); closeDrill(); };
+  box.querySelector('.main').onclick = () => askAbout(part
+    ? (part.kind === 'edge' ? `How are the calls from ${part.from} to ${part.to} doing in ${code}, and does anything need my attention?` : `How is ${part.label} doing in ${code}, and does anything about it need my attention?`)
+    : `Tell me what ${code} shows right now, and whether anything in it needs my attention.`);
+  box.querySelector('form').onsubmit = e => { e.preventDefault(); const t = e.target.querySelector('input').value.trim(); if (t) askAbout(t); };
+  box.hidden = false;
+  // Under the code, kept on screen.
+  const r = at ? { left: at.clientX, top: at.clientY, bottom: at.clientY } : (anchor ?? $('main')).getBoundingClientRect(), w = box.offsetWidth, h = box.offsetHeight;
+  box.style.left = `${Math.max(16, Math.min(innerWidth - w - 16, r.left))}px`;
+  box.style.top = `${Math.max(16, r.bottom + h + 12 > innerHeight ? Math.max(16, r.top - h - 8) : r.bottom + 8)}px`;
+  box.querySelector('.main').focus();
+  conn.drill(code, part && (part.kind === 'edge' ? { kind: 'edge', from: part.from, to: part.to } : { kind: 'node', id: part.id }));
+}
+const partKey = p => (p ? (p.kind === 'edge' ? `${p.from}→${p.to}` : p.id) : null);
+// A change's card: what changed (each event, with its time), what the panel's line did next, and a question to put
+// to the 9000. It uses the drilldown box, so it closes the same way.
+const KIND_WORD = { deploy: 'Deploy', rollback: 'Rollback', scale: 'Scaling', config: 'Config change', upgrade: 'Upgrade', change: 'Change',
+  alert: 'Alert', resolve: 'Cleared', ack: 'Acknowledged', aiden: 'Aiden', plan: 'Plan', incident: 'Incident' };
+function openChange(code, m, at) {
+  const d = systems.find(x => x.code === code);
+  if (d?.data?.kind === 'timeline') return openEvent(code, d, m, at);
+  if (drillOpen(code, `change:${m.t}`)) return closeDrill();
+  drillCode = code; drillPart = `change:${m.t}`;
+  const box = $('drill');
+  box.style.setProperty('--c', d?.color);
+  const span = m.until > m.t + 60_000 ? `${clockOf(m.t)}–${clockOf(m.until)}` : clockOf(m.t);
+  const impact = m.impact
+    ? `${escapeHtml(d?.title ?? code)} ${m.impact.up ? 'rose' : 'fell'} ${escapeHtml(m.impact.display)}${m.impact.crossed ? ', crossing its threshold' : ''}.`
+    : `No clear move in ${escapeHtml(d?.title ?? code)} in the ten minutes after it.`;
+  const source = m.kind === 'scale' ? 'Scaling with no deploy beside it is usually an autoscaler or a manual scale.'
+    : m.kind === 'deploy' ? 'A new ReplicaSet or rollout event: a deploy of new code or settings.' : '';
+  box.innerHTML = `<div class="dhead"><b>CHG</b><span>${escapeHtml(m.label)}</span></div>
+    <div class="note">${span} · ${KIND_WORD[m.kind] ?? 'Change'}${m.service ? ` · ${escapeHtml(m.service)}` : ''}${m.count > 1 ? ` · ${m.count} events` : ''}</div>
+    <p class="impact${m.impact ? '' : ' quiet'}">${impact}</p>
+    <ul class="events">${(m.items ?? []).map(i => `<li><i>${clockOf(i.time)}</i>${escapeHtml(i.text)}</li>`).join('')}</ul>
+    ${source ? `<p class="src">${source}</p>` : ''}
+    <button class="main" type="button">Ask ${who()}: did this cause it? ▸</button>`;
+  box.querySelector('.main').onclick = () => askAbout(`Did the change "${m.label.replace(/ · .*$/, '')}" at ${clockOf(m.t)} cause what ${code} shows? Check it against the evidence.`);
+  box.hidden = false;
+  const w = box.offsetWidth, h = box.offsetHeight;
+  box.style.left = `${Math.max(16, Math.min(innerWidth - w - 16, at.clientX - w / 2))}px`;
+  box.style.top = `${Math.max(16, at.clientY + h + 12 > innerHeight ? at.clientY - h - 12 : at.clientY + 12)}px`;
+  box.querySelector('.main').focus();
+}
+// Open on this panel (and box or mark) already, or closed by the press of this very click. The marker is used once.
+function drillOpen(code, part) {
+  const pressed = justClosed?.code === code && justClosed.part === part && Date.now() - justClosed.at < 500;
+  justClosed = null;
+  return pressed || (!$('drill').hidden && drillCode === code && drillPart === part);
+}
+// A timeline event's card: when, what, the detail behind it (Aiden's finding, a plan's steps, the change's events),
+// and a question for the 9000 about it.
+function openEvent(code, d, m, at) {
+  if (drillOpen(code, `event:${m.t}`)) return closeDrill();
+  drillCode = code; drillPart = `event:${m.t}`;
+  const box = $('drill');
+  box.style.setProperty('--c', d.color);
+  box.innerHTML = `<div class="dhead"><b>${escapeHtml(code)}</b><span>${escapeHtml(KIND_WORD[m.kind] ?? m.kind)} · ${clockOf(m.t)}</span></div>
+    <p class="impact">${escapeHtml(m.label)}</p>
+    ${m.detail && m.detail !== m.label ? `<ul class="events">${String(m.detail).split('\n').filter(Boolean).slice(0, 12).map(l => `<li>${escapeHtml(l)}</li>`).join('')}</ul>` : ''}
+    <button class="main" type="button">Ask ${who()} about this ▸</button>`;
+  box.querySelector('.main').onclick = () => askAbout(`Tell me more about "${m.label}" at ${clockOf(m.t)} in ${code}: what it means for the story.`);
+  box.hidden = false;
+  const w = box.offsetWidth, h = box.offsetHeight;
+  box.style.left = `${Math.max(16, Math.min(innerWidth - w - 16, at.clientX - w / 2))}px`;
+  box.style.top = `${Math.max(16, at.clientY + h + 12 > innerHeight ? at.clientY - h - 12 : at.clientY + 12)}px`;
+  box.querySelector('.main').focus();
+}
+function renderDrill(msg) {
+  if (msg.code !== drillCode || partKey(msg.part) !== drillPart || $('drill').hidden) return;
+  const box = $('drill'), qs = box.querySelector('.qs'), note = box.querySelector('.note');
+  qs.innerHTML = msg.questions.map((q, i) => `<button class="q" type="button"><i>${i + 1}</i><span>${escapeHtml(q)}</span></button>`).join('');
+  qs.querySelectorAll('.q').forEach((b, i) => b.onclick = () => { b.classList.add('picked'); askAbout(msg.questions[i]); });
+  note.classList.toggle('busy', !msg.done);
+  note.textContent = msg.done ? (msg.smart ? `${who()} suggests` : 'Likely questions') : 'Likely questions';
+  const b = box.getBoundingClientRect();   // grown by its questions: keep it on screen
+  if (b.bottom > innerHeight - 16) box.style.top = `${Math.max(16, innerHeight - b.height - 16)}px`;
+}
+function askAbout(text) {
+  conn.ask(text, drillCode);
+  closeDrill();
+}
+function closeDrill() {
+  $('drill').hidden = true;
+  drillCode = null; drillPart = null;
+}
+function drillCurrent() {
+  const code = single || selected;
+  const el = $('main').querySelector(`[data-code="${code}"] .drillable`);
+  if (el) openDrill(code, el);
+}
+// A press outside closes it. Remember what it closed: the click that follows on the same box or mark must not reopen it.
+let justClosed = null;
+addEventListener('pointerdown', e => {
+  if (e.target.closest('#drill, .drillable') || $('drill').hidden) return;
+  justClosed = { code: drillCode, part: drillPart, at: Date.now() };
+  closeDrill();
+});
+
+function showBoard(b) {
+  const codes = b?.panels.map(p => p.code).join(',');
+  const same = board && b && board.panels.map(p => p.code).join(',') === codes;
+  board = b;
+  if (same) {
+    for (const p of b.panels) {
+      const d = systems.find(x => x.code === p.code);
+      if (d) d.data = p;
+      const el = $('main').querySelector(`[data-code="${p.code}"]`);
+      if (el) {
+        for (const st of ['ok', 'warn', 'crit', 'nodata']) el.classList.toggle(`status-${st}`, p.status === st);
+        const tags = el.querySelector('.tags, .health');
+        if (tags) tags.innerHTML = statusTag(p.status, p.baseline);
+      }
+    }
+  } else {
+    systems = b ? b.panels.map(boardPanel) : DISPLAYS;
+    if (!systems.some(d => d.code === single)) single = null;
+    selected = systems[0].code;
+    show(single, view);
+  }
+  clock();
+}
+
+// ---- mission elapsed time, from first launch on this device ----
+let epoch = Number(localStorage.getItem('met-epoch'));
+if (!epoch) { epoch = Date.now() - 412 * 86400e3; try { localStorage.setItem('met-epoch', epoch); } catch {} }
+function clock() {
+  let s = Math.floor((Date.now() - epoch) / 1000);
+  const d = Math.floor(s / 86400); s %= 86400;
+  const p = n => String(n).padStart(2, '0');
+  $('clock').textContent = (board ? `${board.title.toUpperCase()}  ·  ` : '') + `MET ${String(d).padStart(3, '0')}:${p(Math.floor(s / 3600))}:${p(Math.floor(s / 60) % 60)}:${p(s % 60)}`;
+}
+setInterval(clock, 1000); clock();
+
+// ---- stat panels: sampled 4x a second whether or not any are showing ----
+function sampleStats(t) {
+  for (const d of DISPLAYS) {
+    if (!d.stat) continue;
+    const st = d.stat(t, ship), h = history60.get(d.code);
+    const n = Number(st.value);
+    h.push(Number.isFinite(n) ? n : st.sample ?? 0);
+    if (h.length > 60) h.shift();
+    const panel = stats.find(p => p.d === d);
+    if (panel) panel.val.innerHTML = `${st.value}${st.unit ? `<small>${st.unit}</small>` : ''}`;
+  }
+}
+function drawStats(dpr) {
+  for (const { d, canvas } of stats) {
+    const w = canvas.clientWidth, h = canvas.clientHeight, data = history60.get(d.code);
+    if (!w || data.length < 2) continue;
+    // Whole pixels: a canvas's size is an integer, so comparing with a fractional w * dpr (displays scaled 125%, 150%…)
+    // never matched and every canvas was reallocated on every frame, until the tab ran out of memory ("Aw, Snap").
+    const cw = Math.round(w * dpr), ch = Math.round(h * dpr);
+    if (canvas.width !== cw || canvas.height !== ch) { canvas.width = cw; canvas.height = ch; }
+    const ctx = canvas.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+    const lo = Math.min(...data), hi = Math.max(...data), span = hi - lo || 1;
+    const pts = data.map((v, i) => [w - ((data.length - 1 - i) / 59) * w, h - 4 - ((v - lo) / span) * (h - 8)]);   // newest at the right
+    ctx.beginPath(); pts.forEach(([x, y], i) => i ? ctx.lineTo(x, y) : ctx.moveTo(x, y));
+    ctx.strokeStyle = 'rgba(255,255,255,.85)'; ctx.lineWidth = 2; ctx.stroke();
+    ctx.lineTo(pts[pts.length - 1][0], h); ctx.lineTo(pts[0][0], h); ctx.closePath();
+    ctx.fillStyle = 'rgba(255,255,255,.18)'; ctx.fill();
+  }
+}
+
+// ---- render loop ----
+let lastVoice = 0;
+function frame(t) {
+  if (t - lastVoice > 33) {
+    const speaking = ship.state.mode === 'speaking';
+    ship.voice.shift();
+    ship.voice.push(speaking ? Math.max(0.05, (ship.state.pulse || 0.5) - 0.45) * 1.6 : ship.state.mode === 'listening' ? 0.05 + Math.random() * 0.05 : 0.015);
+    lastVoice = t;
+  }
+  const dpr = devicePixelRatio || 1;
+  if (t - lastStat > 250) { sampleStats(t); lastStat = t; drawStats(dpr); }
+  for (const { d, canvas } of screens) {
+    const w = canvas.clientWidth, h = canvas.clientHeight;
+    if (w < 2 || h < 2) continue;   // not laid out (yet): nothing to draw, and drawing code divides by the size
+    // Whole pixels: a canvas's size is an integer, so comparing with a fractional w * dpr (displays scaled 125%, 150%…)
+    // never matched and every canvas was reallocated on every frame, until the tab ran out of memory ("Aw, Snap").
+    const cw = Math.round(w * dpr), ch = Math.round(h * dpr);
+    if (canvas.width !== cw || canvas.height !== ch) { canvas.width = cw; canvas.height = ch; }
+    const ctx = canvas.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+    const tag = canvas.previousElementSibling;   // the HTML header over a Descriptive panel
+    d.draw(ctx, w, h, t, ship, { top: tag ? tag.offsetTop + tag.offsetHeight : 0 });
+  }
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

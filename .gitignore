@@ -1,0 +1,5 @@
+node_modules/
+.env
+auditions/
+evals/report-*.json
+.DS_Store

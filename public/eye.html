@@ -1,0 +1,491 @@
+<!doctype html>
+<html lang="en" data-theme="sal">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#000000">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/icons/icon.svg">
+<title>9000 Eye</title>
+<link rel="stylesheet" href="/base.css">
+<style>
+  body { display: grid; place-items: center; height: 100dvh; overflow: hidden; touch-action: manipulation; }
+
+  /* ---- faceplate: a glossy black slab with thin metal edge lines, as on Discovery ---- */
+  .plate {
+    container-type: size;
+    aspect-ratio: 9 / 20;
+    height: min(100dvh, calc(100vw * 20 / 9));
+    position: relative;
+    background:
+      linear-gradient(90deg, rgba(255,255,255,.035) 0%, rgba(255,255,255,0) 18%, rgba(255,255,255,0) 82%, rgba(255,255,255,.03) 100%),
+      linear-gradient(180deg, #121212 0%, #070707 45%, #050505 100%);
+  }
+  /* The bright trim running down both sides of the slab. */
+  .plate::before, .plate::after {
+    content: ''; position: absolute; top: 0; bottom: 0; width: 0.9cqw;
+    background: linear-gradient(90deg, #5d6064 0%, #e9ebec 45%, #9a9da1 70%, #3c3e41 100%);
+    box-shadow: 0 0 0.8cqw rgba(255,255,255,.12);
+  }
+  .plate::before { left: 0; }
+  .plate::after { right: 0; transform: scaleX(-1); }
+
+  .nameplate {
+    position: absolute; top: 7cqh; left: 50%; translate: -50% 0;
+    display: flex; height: 3.2cqh; width: 40cqw;
+    font-family: var(--font-plate); font-weight: 700; letter-spacing: .06em;
+    box-shadow: 0 0 0 0.25cqw rgba(255,255,255,.12);
+  }
+  .nameplate span { display: grid; place-items: center; font-size: 2.2cqh; line-height: 1; }
+  .nameplate .name { flex: 1.15; background: #0b0b0b; color: #f4f4f4; }
+  .nameplate .num  { flex: 1;    background: #1a3fae; color: #f4f4f4; }
+
+  .panel { position: absolute; inset: 0; }
+
+  /* ---- the lens: chrome ring, thick black surround, dark glass, small lit core, specular arc ---- */
+  .lens {
+    --level: .6;
+    position: absolute; left: 50%; top: 44%; translate: -50% -50%;
+    width: 64cqw; aspect-ratio: 1; border-radius: 50%;
+    cursor: pointer;
+  }
+  .lens > div { position: absolute; border-radius: 50%; pointer-events: none; }
+  body.seeing .iris, body.seeing .core { filter: brightness(1.18) saturate(1.1); }   /* camera on: the eye is looking */
+  .bezel {   /* thin polished chrome ring */
+    inset: 0;
+    background: conic-gradient(from 200deg, #f4f4f4, #6a6d71, #d6d8da, #3a3c3f, #eeeeee, #7a7d81, #e6e7e8, #46484b, #f4f4f4);
+    box-shadow: 0 0 0 0.35cqw #000, 0 1.4cqw 3.5cqw rgba(0,0,0,.85);
+  }
+  .surround {   /* the thick black collar between the chrome and the glass */
+    inset: 3.6%;
+    background: radial-gradient(circle, #020202 62%, #0d0d0d 86%, #1a1a1a 100%);
+    box-shadow: inset 0 0 0 0.2cqw rgba(255,255,255,.06), inset 0 0.8cqw 2cqw rgba(0,0,0,.9);
+  }
+  .glass {      /* dark glass, faintly tinted by the core */
+    inset: 22%;
+    background: radial-gradient(circle,
+      color-mix(in srgb, var(--eye-deep) 85%, #000) 0%, color-mix(in srgb, var(--eye-deep) 45%, #000) 45%, #020101 78%, #000 100%);
+    box-shadow: inset 0 0 0 0.3cqw rgba(0,0,0,.9), inset 0 0 3cqw #000;
+  }
+  .iris {       /* concentric rings inside the glass */
+    inset: 22%;
+    background: repeating-radial-gradient(circle, rgba(255,255,255,0) 0 3.1%, rgba(255,255,255,.045) 3.1% 3.6%);
+    mask: radial-gradient(circle, transparent 20%, #000 34%, #000 92%, transparent 100%);
+  }
+  .core {       /* the small lit centre; the glow level drives its brightness and bloom */
+    inset: 37%;
+    background: radial-gradient(circle,
+      var(--eye-core) 0%, var(--eye-hot) 10%, var(--eye-mid) 34%,
+      color-mix(in srgb, var(--eye-mid) 55%, var(--eye-deep)) 56%, transparent 74%);
+    filter: brightness(calc(.6 + var(--level) * .7)) saturate(calc(.95 + var(--level) * .3));
+    box-shadow: 0 0 calc(1cqw + var(--level) * 7cqw) calc(var(--level) * 1.5cqw) color-mix(in srgb, var(--accent) calc(var(--level) * 55%), transparent);
+  }
+  .arc {        /* the wide specular reflection across the top of the dome */
+    inset: 23.5%;
+    /* A crescent: the dome minus an offset ellipse, brightest at the top, fading towards its tips. */
+    background: linear-gradient(180deg, rgba(255,255,255,.55) 0%, rgba(255,255,255,.18) 18%, rgba(255,255,255,0) 32%);
+    mask: radial-gradient(ellipse 74% 74% at 50% 84%, transparent 97%, #000 100%);
+    mix-blend-mode: screen;
+  }
+  .glint {      /* a small second reflection, lower right */
+    left: 63%; top: 66%; width: 6%; height: 3.2%; rotate: -35deg;
+    background: radial-gradient(ellipse, rgba(255,255,255,.45), rgba(255,255,255,0) 70%);
+    mix-blend-mode: screen;
+  }
+
+  /* ---- speaker: a fine square-hole mesh in a framed panel ---- */
+  .grille {
+    position: absolute; left: 9cqw; right: 9cqw; bottom: 5cqh; height: 17cqh;
+    background:
+      repeating-linear-gradient(0deg, #2a2a2a 0 0.38cqw, transparent 0.38cqw 1.45cqw),
+      repeating-linear-gradient(90deg, #2a2a2a 0 0.38cqw, transparent 0.38cqw 1.45cqw),
+      #020202;
+    box-shadow: inset 0 0 0 0.5cqw #161616, inset 0 0 2cqw rgba(0,0,0,.9), 0 0 0 0.3cqw #2c2e30, 0 -0.2cqw 0 0.3cqw rgba(255,255,255,.08);
+    transition: background-color .6s, box-shadow .6s;
+  }
+  /* Talk mode: light glows faintly through the mesh, so you can tell at a glance the eye is in a conversation. */
+  body.talk .grille {
+    background-color: color-mix(in srgb, var(--accent) 34%, #000);
+    box-shadow: inset 0 0 0 0.5cqw #161616, inset 0 0 2cqw rgba(0,0,0,.6), 0 0 0 0.3cqw #2c2e30, 0 0 2.5cqw color-mix(in srgb, var(--accent) 30%, transparent);
+  }
+
+  /* ---- overlays ---- */
+  .overlay {
+    position: fixed; inset: 0; display: grid; place-items: center; text-align: center;
+    background: rgba(0,0,0,.72); backdrop-filter: blur(4px); z-index: 5;
+    font-family: var(--font-wide); letter-spacing: .14em; text-transform: uppercase;
+  }
+  .overlay[hidden] { display: none; }
+  .overlay p { margin: 0 0 1.2em; font-size: 13px; color: #bbb; }
+  .overlay .big { font-size: 22px; color: #fff; margin-bottom: .6em; }
+  .overlay input {
+    width: 7ch; text-align: center; font-size: 34px; letter-spacing: .3em; padding: .2em .1em .2em .4em;
+    background: #000; border: 1px solid #555; border-radius: 4px; text-transform: uppercase;
+    font-family: var(--font-wide);
+  }
+  .overlay button {
+    margin-top: 1.2em; padding: .9em 2em; background: transparent; border: 1px solid var(--accent);
+    color: #fff; letter-spacing: .2em; border-radius: 3px; font-family: var(--font-wide); font-size: 12px;
+  }
+  .status {
+    position: fixed; top: max(8px, env(safe-area-inset-top)); right: 10px;
+    width: 7px; height: 7px; border-radius: 50%; background: #333; z-index: 6;
+  }
+  .status.online { background: #3c3; box-shadow: 0 0 6px #3c3; }
+</style>
+</head>
+<body>
+  <div class="plate">
+    <div class="nameplate"><span class="name" id="name">SAL</span><span class="num">9000</span></div>
+    <div class="panel">
+      <div class="lens" id="lens">
+        <div class="bezel"></div>
+        <div class="surround"></div>
+        <div class="glass"></div>
+        <div class="iris"></div>
+        <div class="core"></div>
+        <div class="arc"></div>
+        <div class="glint"></div>
+      </div>
+      <div class="grille" id="grille"></div>
+    </div>
+  </div>
+
+  <div class="status" id="status"></div>
+
+  <form class="overlay" id="join" hidden>
+    <div>
+      <p class="big">Connect eye</p>
+      <p>Enter the code shown on the monitor</p>
+      <input id="code" maxlength="6" autocomplete="off" autocapitalize="characters" spellcheck="false" required>
+      <br><button>Connect</button>
+    </div>
+  </form>
+
+  <div class="overlay" id="wake" hidden>
+    <div>
+      <p class="big">Tap to activate</p>
+      <p>Enables voice and keeps the screen on</p>
+    </div>
+  </div>
+
+<script type="module">
+import { connect, roomFromUrl, registerSW, keepAwake, toggleFullscreen, autoHideCursor } from '/shared.js';
+
+registerSW();
+autoHideCursor();
+addEventListener('keydown', e => { if ((e.key === 'f' || e.key === 'F') && !e.target.closest?.('input')) toggleFullscreen(); });
+
+const lens = document.getElementById('lens');
+const $ = id => document.getElementById(id);
+
+// ---- join a room ----
+let room = roomFromUrl();
+if (!room) {
+  $('join').hidden = false;
+  await new Promise(res => $('join').addEventListener('submit', e => {
+    e.preventDefault();
+    room = $('code').value.trim().toUpperCase();
+    history.replaceState(null, '', `?room=${room}`);
+    $('join').hidden = true;
+    res();
+  }));
+}
+
+// ---- voice ----
+// The server sends each reply as sentence-sized audio clips (parts). They play through a "speaker grille"
+// built with Web Audio, and an analyser drives the lens glow from the real loudness.
+// With no parts (no speech server) or a failed clip, the browser's own speech synthesis is used instead.
+let voice;
+function pickVoice() {
+  const voices = speechSynthesis.getVoices().filter(v => v.lang.startsWith('en'));
+  const prefer = ['Daniel', 'Alex', 'Google UK English Male', 'Arthur', 'Oliver', 'Fred', 'Microsoft Guy', 'Microsoft David'];
+  voice = prefer.map(n => voices.find(v => v.name.includes(n))).find(Boolean) || voices[0];
+}
+if ('speechSynthesis' in window) { pickVoice(); speechSynthesis.onvoiceschanged = pickVoice; }
+
+let kick = 0;      // browser speech: spikes on each spoken word, decays each frame
+let ctx, input, analyser, samples, source;
+let audioLevel = 0;
+
+function grille() {
+  // source -> band-limit -> (dry + faint short echo) -> steady loudness -> analyser -> speaker
+  ctx = new (window.AudioContext || window.webkitAudioContext)();
+  input = ctx.createBiquadFilter(); input.type = 'highpass'; input.frequency.value = 110;
+  const low = ctx.createBiquadFilter(); low.type = 'lowpass'; low.frequency.value = 6800;
+  const delay = ctx.createDelay(0.2); delay.delayTime.value = 0.035;
+  const echo = ctx.createGain(); echo.gain.value = 0.16;
+  const comp = ctx.createDynamicsCompressor();
+  comp.threshold.value = -24; comp.ratio.value = 3; comp.attack.value = 0.01; comp.release.value = 0.25;
+  const makeup = ctx.createGain(); makeup.gain.value = 1.4;
+  analyser = ctx.createAnalyser(); analyser.fftSize = 1024; samples = new Float32Array(analyser.fftSize);
+  input.connect(low);
+  low.connect(comp); low.connect(delay); delay.connect(echo); echo.connect(comp);
+  comp.connect(makeup); makeup.connect(analyser); analyser.connect(ctx.destination);
+}
+
+function speakBrowser(text) {
+  return new Promise(resolve => {
+    if (!('speechSynthesis' in window)) return resolve();
+    const u = new SpeechSynthesisUtterance(text);
+    if (voice) u.voice = voice;
+    u.rate = 0.86; u.pitch = 0.78;
+    u.onboundary = () => { kick = 1; };
+    u.onend = u.onerror = () => resolve();
+    speechSynthesis.speak(u);
+  });
+}
+
+async function fetchClip(part) {
+  try {
+    const res = await fetch(part.url);
+    if (!res.ok) throw new Error(res.status);
+    return await ctx.decodeAudioData(await res.arrayBuffer());
+  } catch { return null; }
+}
+
+function playBuffer(buffer) {
+  return new Promise(resolve => {
+    source = ctx.createBufferSource();
+    source.buffer = buffer;
+    source.connect(input);
+    source.onended = () => { source = null; resolve(); };
+    source.start();
+  });
+}
+
+let speech = 0;   // id of the current reply; a newer reply or a tap on the lens cancels the old one
+let focus = null; // the board panel the current story-tour clip is about (the monitors zoom to it)
+let focusMark = null;   // the change on that panel the clip talks about (the monitors light its mark)
+function setFocus(code, mark = null) {
+  if (code === focus && mark === focusMark) return;
+  focus = code; focusMark = mark;
+  conn.set({ focus: code, focusMark: mark });
+}
+// Two answers can arrive close together (a question typed while another was spoken): the second waits its turn
+// instead of cutting the first off. Holding lines ("One moment.") are dropped while a real answer plays.
+let playing = null;      // { interim } while a reply is being spoken
+const waiting = [];      // replies queued behind it
+function onSay(text, parts, interim) {
+  if (playing && !playing.interim) { if (!interim) waiting.push([text, parts]); return; }
+  speak(text, parts, interim);
+}
+// A tap on the lens: stop speaking and forget anything queued.
+function stopSpeaking() {
+  waiting.length = 0;
+  halt();
+}
+function halt() {
+  playing = null;
+  speech++;
+  if (focus) setFocus(null);
+  rec?.abort();
+  window.speechSynthesis?.cancel();
+  try { source?.stop(); } catch {}
+  source = null;
+}
+
+async function speak(text, parts, interim = false) {
+  halt();
+  const id = speech;
+  playing = { interim };
+  if (!parts?.length) parts = [{ text }];   // no server audio: browser speech for the whole reply
+  if (!ctx) parts = parts.map(p => ({ text: p.text, focus: p.focus, mark: p.mark }));   // audio locked: speak each part instead
+  let started = false;
+  let next = parts[0].url ? fetchClip(parts[0]) : Promise.resolve(null);
+  for (let i = 0; i < parts.length; i++) {
+    const buffer = await next;
+    next = parts[i + 1]?.url ? fetchClip(parts[i + 1]) : Promise.resolve(null);   // prefetch while this one plays
+    if (id !== speech) return;
+    if (!started) { started = true; conn.set({ mode: 'speaking', line: text }); }
+    if ('focus' in parts[i]) setFocus(parts[i].focus, parts[i].mark ?? null);   // story tour: the monitors follow along
+    if (buffer) await playBuffer(buffer);
+    else await speakBrowser(parts[i].text);
+    if (id !== speech) return;
+  }
+  if (focus) setFocus(null);   // tour over: monitors go back to where they were
+  playing = null;
+  if (waiting.length) { const [t, p] = waiting.shift(); return speak(t, p); }   // the next answer, straight on
+  // After a holding line the answer is still coming: keep thinking, and don't open the microphone yet.
+  if (interim) { conn.set({ mode: 'thinking', pulse: 0 }); return; }
+  conn.set({ mode: 'idle', pulse: 0 });
+  if (talk) listen();
+}
+
+// ---- connection ----
+const conn = connect({
+  room, role: 'eye',
+  onState: s => {
+    document.documentElement.dataset.theme = s.theme;
+    document.documentElement.classList.toggle('alarm', !!s.alarm);   // an alert is firing: red, pulsing eye
+    $('name').textContent = s.theme === 'hal' ? 'HAL' : 'SAL';
+  },
+  onSay,
+  onTalk: on => setTalk(on),
+  onStatus: st => $('status').className = 'status ' + st,
+  onCamera: on => { wantCamera = on; if (active || !on) camera(on); },
+});
+
+// ---- camera: the 9000's view, sent to the monitors only while one shows the EYE panel ----
+// Front camera (it faces whoever looks at the lens), ~5 small JPEG frames a second. Nothing is stored.
+let wantCamera = false, stream = null, camTimer = null;
+const video = Object.assign(document.createElement('video'), { muted: true, playsInline: true });
+video.setAttribute('playsinline', '');
+async function camera(on) {
+  if (on && !stream) {
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } }, audio: false });
+    } catch (err) {
+      console.warn('camera:', err.name);
+      conn.set({ camera: err.name === 'NotAllowedError' ? 'denied' : 'unavailable' });
+      return;
+    }
+    if (!wantCamera) return camera(false);   // switched off while the permission prompt was up
+    video.srcObject = stream;
+    await video.play().catch(() => {});
+    const c = document.createElement('canvas'), g = c.getContext('2d');
+    camTimer = setInterval(() => {
+      if (!video.videoWidth) return;
+      const ch = Math.round(480 * video.videoHeight / video.videoWidth);
+      if (c.width !== 480 || c.height !== ch) { c.width = 480; c.height = ch; }   // resize only when needed: each resize reallocates
+      g.drawImage(video, 0, 0, c.width, c.height);
+      c.toBlob(b => b && conn.frame(b), 'image/jpeg', .6);
+    }, 200);
+    document.body.classList.add('seeing');
+    conn.set({ camera: 'on' });
+  } else if (!on && stream) {
+    clearInterval(camTimer);
+    stream.getTracks().forEach(t => t.stop());
+    stream = null; video.srcObject = null;
+    document.body.classList.remove('seeing');
+    conn.set({ camera: 'off' });
+  }
+}
+
+// ---- activation (browsers only allow audio/fullscreen after a tap) ----
+let active = false;
+$('wake').hidden = false;
+$('wake').addEventListener('click', () => {
+  active = true;
+  $('wake').hidden = true;
+  if (wantCamera) camera(true);   // some browsers only allow the camera after a tap
+  if ('speechSynthesis' in window) speechSynthesis.speak(new SpeechSynthesisUtterance(''));
+  try { grille(); ctx.resume(); } catch { ctx = null; }   // audio must be unlocked by this tap
+  document.documentElement.requestFullscreen?.().catch(() => {});
+  keepAwake();
+});
+
+// ---- listening (speech recognition needs HTTPS on most phones) ----
+// Tap the lens: listen once. Double-tap: talk mode on/off. In talk mode the eye listens again after every
+// reply, so a conversation needs no tapping; a tap while it speaks cuts it off and listens straight away.
+// Saying "that will be all" / "goodbye" / "stop listening" also ends talk mode (handled by the server).
+const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+const DOUBLE_TAP_MS = 350;
+const TALK_IDLE_LIMIT = 5 * 60_000;   // talk mode turns itself off after 5 minutes without hearing anything
+let rec = null, talk = false, lastTap = 0, tapTimer, lastHeard = 0, awaitingReply;
+
+function listen() {
+  if (rec || !Recognition) return;
+  rec = new Recognition();
+  rec.lang = 'en-US'; rec.interimResults = false;
+  let heard = false;
+  conn.set({ mode: 'listening' });
+  rec.onresult = e => {
+    heard = true; lastHeard = Date.now();
+    conn.ask(e.results[0][0].transcript);
+    // If no reply arrives (network trouble), don't leave talk mode stuck waiting.
+    clearTimeout(awaitingReply);
+    awaitingReply = setTimeout(() => { if (talk && !rec && conn.state.mode !== 'speaking') listen(); }, 30_000);
+  };
+  rec.onerror = e => { if (e.error === 'not-allowed' || e.error === 'service-not-allowed') setTalk(false); };
+  rec.onend = () => {
+    rec = null;
+    if (heard) return;   // the reply will come back through speak(), which listens again in talk mode
+    if (conn.state.mode === 'listening') conn.set({ mode: 'idle' });
+    if (!talk) return;
+    if (Date.now() - lastHeard > TALK_IDLE_LIMIT) setTalk(false);
+    else setTimeout(() => { if (talk && !rec && conn.state.mode !== 'speaking') listen(); }, 250);   // silence: keep listening
+  };
+  try { rec.start(); } catch { rec = null; }
+}
+
+// A short two-note cue: rising when talk mode starts, falling when it ends.
+function chirp(up) {
+  if (!ctx) return;
+  const t = ctx.currentTime, osc = ctx.createOscillator(), g = ctx.createGain();
+  osc.type = 'sine';
+  osc.frequency.setValueAtTime(up ? 660 : 880, t);
+  osc.frequency.setValueAtTime(up ? 880 : 660, t + 0.12);
+  g.gain.setValueAtTime(0, t);
+  g.gain.linearRampToValueAtTime(0.12, t + 0.02);
+  g.gain.setValueAtTime(0.12, t + 0.22);
+  g.gain.linearRampToValueAtTime(0, t + 0.3);
+  osc.connect(g); g.connect(ctx.destination);
+  osc.start(t); osc.stop(t + 0.32);
+}
+
+function setTalk(on) {
+  if (on === talk) return;
+  talk = on;
+  document.body.classList.toggle('talk', talk);
+  chirp(talk);
+  clearTimeout(awaitingReply);
+  if (talk) {
+    lastHeard = Date.now();
+    if (conn.state.mode !== 'speaking') setTimeout(listen, 350);   // after the chirp, so it isn't heard
+  } else {
+    rec?.abort();
+  }
+}
+
+lens.addEventListener('click', () => {
+  if (!active || !Recognition) return;
+  const now = performance.now();
+  if (now - lastTap < DOUBLE_TAP_MS) {   // double tap: talk mode on/off
+    clearTimeout(tapTimer); lastTap = 0;
+    stopSpeaking();
+    setTalk(!talk);
+    return;
+  }
+  lastTap = now;
+  tapTimer = setTimeout(() => { stopSpeaking(); listen(); }, DOUBLE_TAP_MS);   // single tap: listen now
+});
+
+// ---- animate the glow ----
+let lastSent = 0;
+function frame(t) {
+  const mode = conn.state.mode || 'idle';
+  let level;
+  if (mode === 'speaking') {
+    if (source && analyser) {
+      // Real loudness of the voice (RMS), smoothed: quick to rise, slower to fall.
+      analyser.getFloatTimeDomainData(samples);
+      let sum = 0; for (const v of samples) sum += v * v;
+      const rms = Math.min(1, Math.sqrt(sum / samples.length) * 4);
+      audioLevel = rms > audioLevel ? rms : audioLevel * 0.9 + rms * 0.1;
+      level = 0.55 + audioLevel * 0.45;
+    } else {
+      kick *= 0.9;
+      level = 0.62 + kick * 0.38 + (Math.random() - 0.5) * 0.08;
+    }
+    if (t - lastSent > 80) { conn.set({ pulse: +level.toFixed(2) }); lastSent = t; }
+  } else if (mode === 'thinking') {
+    level = 0.68 + Math.sin(t / 380) * 0.1;   // considering the question
+  } else if (mode === 'listening') {
+    level = 0.8 + Math.sin(t / 220) * 0.06;
+  } else if (conn.state.alarm?.ack && mode === 'idle') {
+    level = 0.62 + Math.sin(t / 700) * 0.14;   // acknowledged: someone has it; a slow, steady pulse
+  } else if (mode === 'alert' || (conn.state.alarm && mode === 'idle')) {
+    level = 0.45 + (Math.sin(t / 140) > 0 ? 0.55 : 0);
+  } else {
+    level = 0.6 + Math.sin(t / 1600) * 0.07;   // slow breathing
+  }
+  lens.style.setProperty('--level', Math.max(0, Math.min(1, level)).toFixed(3));
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

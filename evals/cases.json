@@ -1,0 +1,114 @@
+[
+ {
+  "id": "chat-terse",
+  "ask": "What is the capital of Australia?",
+  "expect": [
+   "canberra"
+  ],
+  "maxWords": 20,
+  "maxSeconds": 10,
+  "noTools": true
+ },
+ {
+  "id": "cluster-health",
+  "ask": "How is the retail cluster doing?",
+  "tools": [
+   "health board|Assembling a board"
+  ],
+  "expect": [
+   "retail"
+  ],
+  "maxWords": 45,
+  "maxSeconds": 25
+ },
+ {
+  "id": "attention",
+  "ask": "What needs my attention across the estate?",
+  "tools": [
+   "situation board|Checking the alerts"
+  ],
+  "expect": [
+   "discovery|kubernetes|healthtech"
+  ],
+  "maxWords": 70,
+  "maxSeconds": 30
+ },
+ {
+  "id": "kubernetes-story",
+  "ask": "What's wrong with the kubernetes cluster? Tell me the story.",
+  "tools": [
+   "Gathering the evidence"
+  ],
+  "expect": [
+   "crash|restart",
+   "victoria|storage|disk|garage|tempo"
+  ],
+  "maxSeconds": 120
+ },
+ {
+  "id": "broken-rule",
+  "ask": "Tell me about the Hubble Relay CrashLoopBackOff alert.",
+  "tools": [
+   "Gathering the evidence|Reading the alert"
+  ],
+  "expect": [
+   "fail|broken|data source|evaluat"
+  ],
+  "maxSeconds": 90
+ },
+ {
+  "id": "coverage",
+  "ask": "Are we alerting on the crash-looping pods in the kubernetes cluster?",
+  "tools": [
+   "alert coverage|Gathering the evidence|Checking the alerts"
+  ],
+  "expect": [
+   "no |not|broken|fail|propos"
+  ],
+  "maxSeconds": 60
+ },
+ {
+  "id": "self-check",
+  "ask": "SAL, are you completely operational? How have you been performing?",
+  "tools": [
+   "self-diagnostic"
+  ],
+  "expect": [
+   "second|percent|questions"
+  ],
+  "maxWords": 60,
+  "maxSeconds": 20
+ },
+ {
+  "id": "chronic",
+  "ask": "Is the gaming error rate something new?",
+  "expect": [
+   "yesterday|chronic|steady|same|not new"
+  ],
+  "maxSeconds": 45
+ },
+ {
+  "id": "memory",
+  "ask": "Have we seen the kubernetes observability crash loops before? What fixed it?",
+  "tools": [
+   "Searching memory|Gathering the evidence"
+  ],
+  "expect": [
+   "INC-0001|before|longhorn|victoria|october|twentieth|again|similar|previous"
+  ],
+  "maxSeconds": 90
+ },
+ {
+  "id": "slow-trace",
+  "ask": "Show me the slowest trace through checkout-api. Where does the time go?",
+  "tools": [
+   "slow trace|Searching the traces"
+  ],
+  "expect": [
+   "payment",
+   "\\d|millisecond|second"
+  ],
+  "maxWords": 60,
+  "maxSeconds": 30
+ }
+]
