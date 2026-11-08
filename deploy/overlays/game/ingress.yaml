@@ -1,0 +1,22 @@
+# The booth's 9000: https://9000-game.stackgen.run. DNS is a record in the DNSEndpoint on fe-stackgen-run
+# (~/src/discovery-one/deploy/fe-stackgen-run/dns.yaml); the certificate comes from Let's Encrypt.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: hal9000
+  namespace: hal9000
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    traefik.ingress.kubernetes.io/router.entrypoints: web,websecure
+spec:
+  ingressClassName: null
+  tls:
+    - hosts: [9000-game.stackgen.run]
+      secretName: hal9000-game-tls
+  rules:
+    - host: 9000-game.stackgen.run
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend: { service: { name: hal9000, port: { name: http } } }

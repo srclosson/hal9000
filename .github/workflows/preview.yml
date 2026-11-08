@@ -1,0 +1,155 @@
+# Previews of the 9000 for pull requests: try a change before it ships (README → Capability requests, docs/CANVAS.md §10).
+# The 9000 never deploys anything: this workflow does, with a credential that can only touch hal9000-pr-<n> namespaces
+# (deploy/preview-access/previewers.yaml).
+#
+#   opened / pushed   build the PR's amd64 image (pr-<n>), apply deploy/overlays/preview pinned to its digest in
+#                     namespace hal9000-pr-<n> at https://pr-<n>.<PREVIEW_DOMAIN> with HAL_PREVIEW=1 (read-only),
+#                     run the evals against it and production, and record the URL, digest and scores on the PR and,
+#                     when a capability request opened the PR, with the 9000 (its "Ready to try" card)
+#   closed            delete the namespace and tell the 9000
+#   every 30 min      remove previews the 9000 no longer wants (expired untried, rejected, replaced)
+#
+# Repository settings it needs (none are created by the 9000):
+#   secrets  DOCKERHUB_TOKEN       push to docker.io/srclosson/hal9000
+#            PREVIEW_KUBECONFIG    kubeconfig for the hal9000-previewer service account (preview namespaces only)
+#            PREVIEW_HAL_ENV       the preview's hal9000-keys, as KEY=value lines (its own AUTOMATION_TOKEN among them)
+#            HAL_DEPLOYER_TOKEN    Settings → Capabilities → Deployer token on the real 9000
+#            HAL_EVAL_TOKEN        the real 9000's AUTOMATION_TOKEN, to run the evals against production
+#   vars     DOCKERHUB_USERNAME (srclosson), HAL_URL (https://9000.stackgen.run), PREVIEW_DOMAIN (9000.stackgen.run)
+name: Preview
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, closed]
+  schedule:
+    - cron: '*/30 * * * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: preview-${{ github.event.pull_request.number || 'reconcile' }}
+  cancel-in-progress: ${{ github.event.action != 'closed' }}
+
+env:
+  IMAGE: docker.io/srclosson/hal9000
+  PR: ${{ github.event.pull_request.number }}
+  HAL_URL: ${{ vars.HAL_URL }}
+  HAL_DEPLOYER_TOKEN: ${{ secrets.HAL_DEPLOYER_TOKEN }}
+  GITHUB_TOKEN: ${{ github.token }}
+
+jobs:
+  preview:
+    if: github.event_name == 'pull_request' && github.event.action != 'closed' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with: { username: '${{ vars.DOCKERHUB_USERNAME }}', password: '${{ secrets.DOCKERHUB_TOKEN }}' }
+      - id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: ${{ env.IMAGE }}:pr-${{ env.PR }},${{ env.IMAGE }}:pr-${{ env.PR }}-${{ github.event.pull_request.head.sha }}
+
+      - uses: azure/setup-kubectl@v4
+      - name: Apply the preview
+        env:
+          KUBECONFIG_DATA: ${{ secrets.PREVIEW_KUBECONFIG }}
+          HAL_ENV: ${{ secrets.PREVIEW_HAL_ENV }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+          DOMAIN: ${{ vars.PREVIEW_DOMAIN }}
+        run: |
+          set -euo pipefail
+          umask 077
+          printf '%s\n' "$KUBECONFIG_DATA" > "$RUNNER_TEMP/kubeconfig"; export KUBECONFIG="$RUNNER_TEMP/kubeconfig"
+          NS="hal9000-pr-$PR"; HOST="pr-$PR.$DOMAIN"
+          kubectl create namespace "$NS" --dry-run=client -o yaml | kubectl apply -f -
+          kubectl label namespace "$NS" --overwrite hal9000.stackgen.run/preview=true "hal9000.stackgen.run/pr=$PR"
+          kubectl -n "$NS" create rolebinding previewer --clusterrole=previewer-in-namespace \
+            --serviceaccount=preview-deployers:hal9000-previewer --dry-run=client -o yaml | kubectl apply -f -
+          printf '%s\n' "$HAL_ENV" > "$RUNNER_TEMP/hal.env"
+          kubectl -n "$NS" create secret generic hal9000-keys --from-env-file="$RUNNER_TEMP/hal.env" --dry-run=client -o yaml | kubectl apply -f -
+          rm -f "$RUNNER_TEMP/hal.env"
+          # The overlay's placeholders: namespace, the image pinned by digest (what is tried is what ships), the host.
+          cd deploy/overlays/preview
+          sed -i -e "s/^namespace: hal9000-pr-0$/namespace: $NS/" -e "s/^    newTag: pr-0$/    digest: $DIGEST/" -e "s/PREVIEW_HOST/$HOST/g" kustomization.yaml
+          kubectl apply -k .
+          kubectl -n "$NS" rollout status deploy/hal9000 --timeout=300s
+          echo "HOST=$HOST" >> "$GITHUB_ENV"
+
+      - name: Evals, preview against production
+        continue-on-error: true
+        env:
+          HAL_ENV: ${{ secrets.PREVIEW_HAL_ENV }}
+          PROD_TOKEN: ${{ secrets.HAL_EVAL_TOKEN }}
+        run: |
+          set -uo pipefail
+          for i in $(seq 1 30); do curl -fsS -o /dev/null "https://$HOST/healthz" && break; sleep 10; done   # TLS certificate first
+          npm ci --omit=dev --no-audit --no-fund
+          PREVIEW_TOKEN=$(printf '%s\n' "$HAL_ENV" | sed -n 's/^AUTOMATION_TOKEN=//p' | head -1)
+          EVAL_TOKEN="$PREVIEW_TOKEN" EVAL_REPORT="$RUNNER_TEMP/preview.json" node evals/run.mjs "wss://$HOST" || true
+          EVAL_TOKEN="$PROD_TOKEN" EVAL_REPORT="$RUNNER_TEMP/prod.json" node evals/run.mjs "${HAL_URL/https:/wss:}" || true
+          node .github/preview/hal.mjs evals "$RUNNER_TEMP/prod.json" "$RUNNER_TEMP/preview.json" > "$RUNNER_TEMP/evals.json"
+          cat "$RUNNER_TEMP/evals.json"
+
+      - name: Record it on the PR and with the 9000
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          EV="$RUNNER_TEMP/evals.json"
+          SCORES=$( [ -s "$EV" ] && node -e "const e=require('$EV'); console.log(e.prod+' in production → '+e.preview+' in the preview'+(e.regressed.length?'; regressed: '+e.regressed.join(', '):''))" || echo 'not run' )
+          cat > "$RUNNER_TEMP/comment.md" <<MD
+          **Preview of the 9000** for this PR: https://$HOST
+          - build \`$DIGEST\` (what ships if this is approved after trying it)
+          - read-only: no plans, writes or announcements; memory goes to a scratch collection
+          - evals: $SCORES
+
+          Try it from the "Ready to try" card on the 9000's monitor (key \`y\`) when a capability request opened this PR. Closing the PR removes the preview.
+          MD
+          node .github/preview/hal.mjs comment "$PR" "$RUNNER_TEMP/comment.md"
+          node .github/preview/hal.mjs preview "$PR" "https://$HOST" "$DIGEST" "$EV"
+
+  teardown:
+    if: github.event_name == 'pull_request' && github.event.action == 'closed' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-kubectl@v4
+      - name: Remove the preview
+        env: { KUBECONFIG_DATA: '${{ secrets.PREVIEW_KUBECONFIG }}', DOMAIN: '${{ vars.PREVIEW_DOMAIN }}' }
+        run: |
+          set -euo pipefail
+          umask 077
+          printf '%s\n' "$KUBECONFIG_DATA" > "$RUNNER_TEMP/kubeconfig"; export KUBECONFIG="$RUNNER_TEMP/kubeconfig"
+          kubectl delete namespace "hal9000-pr-$PR" --ignore-not-found --wait=false
+          node .github/preview/hal.mjs torn-down "$PR" "https://pr-$PR.$DOMAIN/" || true
+          printf 'The preview for this PR has been removed.\n' > "$RUNNER_TEMP/comment.md"
+          node .github/preview/hal.mjs comment "$PR" "$RUNNER_TEMP/comment.md"
+
+  reconcile:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-kubectl@v4
+      - name: Remove previews the 9000 no longer wants
+        env: { KUBECONFIG_DATA: '${{ secrets.PREVIEW_KUBECONFIG }}' }
+        run: |
+          set -euo pipefail
+          umask 077
+          printf '%s\n' "$KUBECONFIG_DATA" > "$RUNNER_TEMP/kubeconfig"; export KUBECONFIG="$RUNNER_TEMP/kubeconfig"
+          node .github/preview/hal.mjs teardowns | while read -r pr url; do
+            kubectl delete namespace "hal9000-pr-$pr" --ignore-not-found --wait=false
+            node .github/preview/hal.mjs torn-down "$pr" "$url"
+          done

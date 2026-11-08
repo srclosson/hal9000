@@ -1,8 +1,8 @@
 // Fixes: the only way the 9000 changes anything. It proposes a plan; the plan is shown on the monitors; a signed-in
 // person approves it there (or by voice from a signed-in eye); only then does it run, step by step, and get checked.
 //
-// A plan's steps may only use "ask first" tools (Settings → MCP servers: tools set to "Ask first"), which are never
-// offered to the model directly and can only be called for a step of an approved plan (mcp.call with approved).
+// A plan's steps may only use "ask first" tools (Settings → MCP servers: tools set to "Ask first") and the 9000's built-in
+// steps (registerStep), which are never offered to the model directly and can only run for a step of an approved plan.
 // Each step's arguments are checked against the tool's schema. The plan is pinned by a hash of exactly what was shown,
 // so what runs is what was approved; any change means a new plan and a new approval. Plans expire if not decided.
 //
@@ -15,6 +15,9 @@ import crypto from 'node:crypto';
 import * as mcp from '../mcp/index.js';
 import * as config from '../config/index.js';
 import { prom } from '../boards/index.js';
+import { PREVIEW } from '../preview.js';
+import * as knowhow from '../knowhow/index.js';
+import * as resume from '../resume/index.js';
 
 const MAX_STEPS = 6;
 const plans = new Map();   // id -> plan
@@ -22,12 +25,32 @@ let seq = 0;
 const listeners = new Set();
 export const onChange = fn => listeners.add(fn);
 const DONE = new Set(['verified', 'done', 'unverified', 'failed', 'rejected', 'expired', 'replaced']);
+// Kept across a restart (resume/): plans awaiting approval, and the last day's finished ones (for timelines). A plan
+// that was mid-run can't carry on in a new process: it comes back failed, saying so.
+resume.register('plans', {
+  save: () => [...plans.values()].filter(p => p.status === 'pending' || !DONE.has(p.status) || Date.now() - (p.finishedAt ?? p.createdAt) < 86_400_000).slice(-40),
+  restore: list => {
+    for (const p of list ?? []) {
+      if (plans.has(p.id)) continue;
+      if (!DONE.has(p.status) && p.status !== 'pending') Object.assign(p, { status: 'failed', note: `Interrupted by a restart while ${p.status}.`, finishedAt: Date.now() });
+      plans.set(p.id, p);
+      seq = Math.max(seq, Number(String(p.id).replace(/\D/g, '')) || 0);
+    }
+  },
+});
 const emit = plan => { if (DONE.has(plan.status) && !plan.finishedAt) plan.finishedAt = Date.now(); for (const fn of listeners) try { fn(plan); } catch (err) { console.error('Fixes listener:', err.message); } };
 
 export const get = id => plans.get(id) ?? null;
 export const pendingFor = room => [...plans.values()].filter(p => p.room === room && p.status === 'pending').at(-1) ?? null;
 export const latestFor = room => [...plans.values()].filter(p => p.room === room).at(-1) ?? null;
-export const available = () => mcp.approvalTools().length > 0;
+// Built-in steps: actions of the 9000's own (not MCP tools) that may only run as a step of an approved plan, e.g.
+// asking Aiden for a pull request (capabilities/index.js). registerStep({ name, description, inputSchema, run(args, plan) });
+// run resolves to text (starting "Error" when it failed), like an MCP tool's result.
+const builtins = new Map();
+export const registerStep = step => builtins.set(step.name, step);
+const catalog = () => [...mcp.approvalTools(), ...[...builtins.values()].filter(b => b.available?.() ?? true)
+  .map(b => ({ name: b.name, server: 'HAL 9000', description: typeof b.description === 'function' ? b.description() : b.description, inputSchema: typeof b.inputSchema === 'function' ? b.inputSchema() : b.inputSchema, destructive: false, builtin: true }))];
+export const available = () => !PREVIEW && catalog().length > 0;   // a preview proposes nothing (preview.js)
 // For timelines: the plans about an alert, or for an incident.
 export const about = ({ alertUid, incident }) => [...plans.values()].filter(p => (alertUid && p.alertUid === alertUid) || (incident && p.incident === incident));
 const OPEN = new Set(['pending', 'approved', 'running', 'verifying']);
@@ -56,24 +79,26 @@ const hashOf = p => crypto.createHash('sha256').update(JSON.stringify([p.title, 
 // ---- proposing ---------------------------------------------------------------------------------------------
 // ctx: { room, alertUid } (the ship asking, and the alert it is alarming about, if any).
 export function propose(input, ctx = {}) {
-  const catalog = mcp.approvalTools();
+  if (PREVIEW) return { error: 'This is a preview of the 9000: plans are proposed and approved on the real one.' };
+  const tools = catalog();
   const steps = (input.steps ?? []).slice(0, MAX_STEPS + 1);
   if (!steps.length) return { error: 'A plan needs at least one step.' };
   if (steps.length > MAX_STEPS) return { error: `At most ${MAX_STEPS} steps; split it into smaller plans.` };
-  for (const st of [...steps, ...(input.undo ?? [])]) { const e = checkStep(st, catalog); if (e) return { error: e }; }
+  for (const st of [...steps, ...(input.undo ?? [])]) { const e = checkStep(st, tools); if (e) return { error: e }; }
   const v = input.verify;
   if (v && (!v.query || !['below', 'above'].includes(v.expect) || typeof v.value !== 'number')) return { error: 'verify needs { query (PromQL), expect: "below" | "above", value (number), minutes? }.' };
   // A new plan replaces this ship's undecided one.
   for (const p of plans.values()) if (p.room === ctx.room && p.status === 'pending') { p.status = 'replaced'; emit(p); }
-  const now = Date.now(), server = name => catalog.find(x => x.name === name)?.server;
+  const now = Date.now(), server = name => tools.find(x => x.name === name)?.server;
   const plan = {
     id: `P-${++seq}`, room: ctx.room, alertUid: ctx.alertUid ?? null, incident: input.incident ?? null,
+    runbook: /^RB-\d+$/i.test(input.runbook ?? '') ? input.runbook.toUpperCase() : null,
     title: String(input.title ?? 'Fix').slice(0, 120), problem: String(input.problem ?? '').slice(0, 600),
     steps: steps.map(s => ({ tool: s.tool, server: server(s.tool), args: s.args ?? {}, why: String(s.why ?? '').slice(0, 200), status: 'pending', result: null })),
     expected: String(input.expected ?? '').slice(0, 300), risk: String(input.risk ?? '').slice(0, 300),
     verify: v ? { query: v.query, expect: v.expect, value: v.value, minutes: Math.min(15, Math.max(1, v.minutes ?? 5)), now: null, outcome: null } : null,
     undo: (input.undo ?? []).slice(0, MAX_STEPS).map(s => ({ tool: s.tool, server: server(s.tool), args: s.args ?? {}, why: String(s.why ?? '').slice(0, 200) })),
-    destructive: steps.some(s => catalog.find(x => x.name === s.tool)?.destructive),
+    destructive: steps.some(s => tools.find(x => x.name === s.tool)?.destructive),
     status: 'pending', createdAt: now, expiresAt: now + config.get('fixes.expireMinutes') * 60_000, decidedBy: null, decidedAt: null, note: null,
   };
   plan.hash = hashOf(plan);
@@ -86,6 +111,7 @@ export function propose(input, ctx = {}) {
 // ---- deciding ------------------------------------------------------------------------------------------------
 // person: the signed-in person deciding (the server refuses anyone else). hash: what they saw.
 export function decide(id, decision, person, hash) {
+  if (PREVIEW) return 'This is a preview of the 9000: nothing is approved here.';
   const plan = plans.get(id);
   if (!plan) return 'There is no such plan.';
   if (plan.status !== 'pending') return `Plan ${plan.id} is already ${plan.status}.`;
@@ -110,7 +136,8 @@ async function run(plan) {
   for (const step of plan.steps) {
     step.status = 'running';
     emit(plan);
-    const out = await mcp.call(step.tool, step.args, { approved: true });
+    const builtin = builtins.get(step.tool);
+    const out = builtin ? await builtin.run(step.args, plan).catch(err => `Error: ${err.message}`) : await mcp.call(step.tool, step.args, { approved: true });
     step.result = String(out).slice(0, 600);
     step.status = failed(out) ? 'failed' : 'done';
     emit(plan);
@@ -158,11 +185,11 @@ export function describePlan(p) {
 
 // ---- tools for the model ------------------------------------------------------------------------------------
 function catalogText() {
-  return mcp.approvalTools().slice(0, 40).map(t => {
+  return catalog().slice(0, 40).map(t => {
     const s = t.inputSchema ?? {}, req = new Set(s.required ?? []);
     // Each argument with its allowed values, so what a tool can do is visible (create_command's action: …|replace|…).
     const args = Object.entries(s.properties ?? {}).map(([k, v]) => `${k}${req.has(k) ? '' : '?'}${v?.enum ? `: ${v.enum.join('|')}` : ''}`).join(', ');
-    return `${t.name}(${args}) [${t.server}${t.destructive ? ', destructive' : ''}]: ${t.description.replace(/\s+/g, ' ').slice(0, 320)}`;
+    return `${t.name}(${args}) [${t.server}${t.destructive ? ', destructive' : ''}]: ${t.description.replace(/\s+/g, ' ').slice(0, t.builtin ? 1200 : 320)}`;
   }).join('\n');
 }
 const STEP = { type: 'object', properties: { tool: { type: 'string' }, args: { type: 'object' }, why: { type: 'string', description: 'One short sentence: what this step changes and why' } }, required: ['tool', 'args', 'why'] };
@@ -181,7 +208,8 @@ export function tools() {
           description: 'How to check it worked: a PromQL query that should go below (or above) a value within some minutes' },
         undo: { type: 'array', items: STEP, description: 'Tool calls that reverse the steps, if possible' },
         risk: { type: 'string', description: 'What could go wrong, one sentence' },
-        incident: { type: 'string', description: 'The incident this is for, e.g. INC-0007, if any' } },
+        incident: { type: 'string', description: 'The incident this is for, e.g. INC-0007, if any' },
+        runbook: { type: 'string', description: 'The Know-how runbook this plan follows, e.g. RB-0004, if any (how it ends is recorded against the runbook)' } },
         required: ['title', 'problem', 'steps', 'expected', 'risk'] } },
     { name: 'plan_status', description: 'The state of a plan you proposed (the latest on this ship if no id): awaiting approval, running, verified, failed…',
       inputSchema: { type: 'object', properties: { id: { type: 'string' } } } },
@@ -197,8 +225,14 @@ export async function call(name, args = {}, hooks = {}) {
     const p = args.id ? get(args.id) : latestFor(ctx.room);
     return p ? describePlan(p) : 'No plan has been proposed on this ship.';
   }
-  const r = propose(args, { room: ctx.room, alertUid: ctx.alertUid });
+  // Standing orders from Know-how, written by people: "avoid" refuses the plan; "require approval" goes on it.
+  const orders = await knowhow.guard(args);
+  if (orders.avoid.length) return `The plan was not shown: a standing order says not to: ${orders.avoid.map(o => `"${o.instruction}" (${o.author})`).join('; ')}. ` +
+    'Tell the person, in one or two sentences, and suggest what else could be done; if the order no longer applies, a person can change it in Know-how.';
+  const withOrders = orders.approval.length ? { ...args, problem: `${orders.approval.map(o => `Standing order (${o.author}): ${o.instruction}`).join(' ')} ${args.problem ?? ''}`.trim() } : args;
+  const r = propose(withOrders, { room: ctx.room, alertUid: ctx.alertUid });
   if (r.error) return `The plan was not shown: ${r.error} Fix it and propose again.`;
   return `Plan ${r.plan.id} is on the monitors, awaiting approval by a signed-in person. Tell them in one or two sentences what it will do and that it needs their approval on the screen; ` +
+    `${orders.approval.length ? `say that a standing order asks for ${orders.approval.map(o => o.instruction).join('; ')}; ` : ''}` +
     'do not say it has been done. You will be told the outcome; plan_status reports it.';
 }

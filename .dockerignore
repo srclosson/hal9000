@@ -4,3 +4,4 @@ node_modules
 deploy
 *.md
 evals/report-*
+public/assets

@@ -30,6 +30,23 @@ export function quick(info) {
     return q.slice(0, MAX);
   }
 
+  if (part?.kind === 'k8snode' || part?.kind === 'workload') {   // a node or a workload tile on a node map
+    const nodes = p.nodes ?? [], cl = short(p.cluster);
+    if (part.kind === 'k8snode') {
+      const n = nodes.find(x => x.name === part.id), lit = (n?.workloads ?? []).filter(w => w.status !== 'ok').map(w => w.name);
+      if (n && !n.ready) q.push(`Why is node ${part.id} not ready?`);
+      if (n?.pct >= 85) q.push(`What is using the memory on ${part.id}?`, `Is ${part.id} overcommitted on memory?`);
+      if (lit.length) q.push(`Why is ${lit[0]} unhealthy on ${part.id}?`);
+      q.push(`What changed on node ${part.id} recently?`, `Which workloads on ${part.id} restart most?`, `How is ${cl} doing overall?`);
+    } else {
+      const [ns, rest] = part.id.split('/'), [name, node] = String(rest ?? '').split('@');
+      const w = nodes.find(x => x.name === node)?.workloads.find(x => x.name === name && x.namespace === ns);
+      if (w?.status !== 'ok' && w?.reason) q.push(`Why is ${name} ${w.reason.split(',')[0]}?`);
+      q.push(`Show ${name} logs from the last 15 minutes`, `How much memory does ${name} use over time?`, `What changed on ${name} recently?`, `Where else does ${name} run?`);
+    }
+    return [...new Set(q)].slice(0, MAX);
+  }
+
   if (part) {   // a box or arrow clicked on a flow diagram
     const bad = x => x && x.status !== 'ok';
     if (part.kind === 'edge') {
@@ -109,7 +126,7 @@ export async function smart(room, info) {
     'Guess what they most likely want to know next, most useful first: causes of anything unhealthy, when it started, what changed, which item stands out, impact, comparisons over time. ' +
     'Each question must be answerable from metrics, logs, traces or alerts, at most ten words, and name the specific service, cluster or item it is about. ' +
     `Reply with exactly ${MAX} questions, one per line, nothing else.`,
-    `Board "${info.board}". Panel: ${info.line}` + (info.part ? `\nThe person clicked on ${info.part.kind === 'edge' ? `the call from ${info.part.from} to ${info.part.to}` : `the service ${info.part.id}`} in this diagram: every question must be about it. Traces of single requests can be shown (e.g. "Show the slowest trace through X").` : ''),
+    `Board "${info.board}". Panel: ${info.line}` + (info.part ? `\nThe person clicked on ${info.part.kind === 'edge' ? `the call from ${info.part.from} to ${info.part.to}` : info.part.kind === 'k8snode' ? `the Kubernetes node ${info.part.id}` : info.part.kind === 'workload' ? `the workload ${info.part.id.replace('@', ' on node ')} (namespace/name)` : `the service ${info.part.id}`} in this diagram: every question must be about it.${['k8snode', 'workload'].includes(info.part.kind) ? '' : ' Traces of single requests can be shown (e.g. "Show the slowest trace through X").'}` : ''),
     25_000,
   );
   const questions = String(text ?? '').split('\n').map(l => l.replace(/^\s*(?:[-*•]|\d+[.)])\s*/, '').replace(/^"|"$/g, '').trim())

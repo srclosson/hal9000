@@ -1,0 +1,122 @@
+# Applied 2026-11-03 (user-approved). Cluster access for the preview workflows (.github/workflows/preview.yml in srclosson/hal9000 and
+# srclosson/discovery-one). Review, then apply once with an admin kubeconfig:
+#   KUBECONFIG=~/.kube/config.discovery-one kubectl apply -f deploy/preview-access/previewers.yaml
+#
+# Two service accounts, one per repository. Each may only:
+#   - create, label and delete namespaces named <prefix>-pr-<n> (hal9000-pr-12, discovery-pr-3)
+#   - bind the ClusterRole "previewer-in-namespace" to itself inside such a namespace, which gives it everything it needs
+#     there (deployments, services, ingresses, config maps, secrets, PVCs, pods) and nothing anywhere else.
+# It can read no other namespace, and no Secret outside its previews. RBAC alone can't limit namespace names, so the
+# ValidatingAdmissionPolicy below does: every write by these accounts must name a namespace with their own prefix.
+apiVersion: v1
+kind: Namespace
+metadata: { name: preview-deployers }
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata: { name: hal9000-previewer, namespace: preview-deployers }
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata: { name: discovery-previewer, namespace: preview-deployers }
+---
+# Their tokens, for the workflows' kubeconfigs (repository secret PREVIEW_KUBECONFIG). Long-lived but revocable: delete
+# the Secret and the token stops working; re-apply this file to mint a new one.
+apiVersion: v1
+kind: Secret
+type: kubernetes.io/service-account-token
+metadata:
+  name: hal9000-previewer-token
+  namespace: preview-deployers
+  annotations: { kubernetes.io/service-account.name: hal9000-previewer }
+---
+apiVersion: v1
+kind: Secret
+type: kubernetes.io/service-account-token
+metadata:
+  name: discovery-previewer-token
+  namespace: preview-deployers
+  annotations: { kubernetes.io/service-account.name: discovery-previewer }
+---
+# What a previewer may do inside one of its own preview namespaces (bound there by a RoleBinding it creates).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata: { name: previewer-in-namespace }
+rules:
+  - apiGroups: [""]
+    resources: [services, configmaps, secrets, persistentvolumeclaims]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [""]
+    resources: [pods, pods/log, events]
+    verbs: [get, list, watch]
+  - apiGroups: [apps]
+    resources: [deployments, statefulsets, replicasets]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [networking.k8s.io]
+    resources: [ingresses]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [cert-manager.io]
+    resources: [certificates]
+    verbs: [get, list, watch]
+---
+# Cluster-wide, only: namespaces (names checked by the policy) and binding the role above (to itself, checked by the policy).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata: { name: previewer }
+rules:
+  - apiGroups: [""]
+    resources: [namespaces]
+    verbs: [get, create, patch, delete]
+  - apiGroups: [rbac.authorization.k8s.io]
+    resources: [rolebindings]
+    verbs: [get, create]
+  - apiGroups: [rbac.authorization.k8s.io]
+    resources: [clusterroles]
+    verbs: [bind]
+    resourceNames: [previewer-in-namespace]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata: { name: previewers }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: previewer }
+subjects:
+  - { kind: ServiceAccount, name: hal9000-previewer, namespace: preview-deployers }
+  - { kind: ServiceAccount, name: discovery-previewer, namespace: preview-deployers }
+---
+# Every write by a previewer must be in (or be) a namespace with its own prefix, and a RoleBinding it makes may only give
+# itself previewer-in-namespace.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata: { name: previewers-stay-in-their-namespaces }
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["*"]
+        apiVersions: ["*"]
+        operations: [CREATE, UPDATE, DELETE]
+        resources: ["*"]
+  matchConditions:
+    - name: is-a-previewer
+      expression: "request.userInfo.username in ['system:serviceaccount:preview-deployers:hal9000-previewer', 'system:serviceaccount:preview-deployers:discovery-previewer']"
+  variables:
+    - name: prefix
+      expression: "request.userInfo.username.endsWith(':hal9000-previewer') ? 'hal9000' : 'discovery'"
+    - name: target
+      expression: "request.resource.resource == 'namespaces' ? request.name : request.namespace"
+  validations:
+    - expression: "variables.target.matches('^' + variables.prefix + '-pr-[0-9]+$')"
+      messageExpression: "'a previewer may only work in namespaces named ' + variables.prefix + '-pr-<n>, not \"' + variables.target + '\"'"
+    - expression: >-
+        request.resource.resource != 'rolebindings' || request.operation == 'DELETE' ||
+        (object.roleRef.kind == 'ClusterRole' && object.roleRef.name == 'previewer-in-namespace' &&
+         object.subjects.all(s, s.kind == 'ServiceAccount' && s.namespace == 'preview-deployers' &&
+           'system:serviceaccount:preview-deployers:' + s.name == request.userInfo.username))
+      message: a previewer may only bind previewer-in-namespace, to itself
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata: { name: previewers-stay-in-their-namespaces }
+spec:
+  policyName: previewers-stay-in-their-namespaces
+  validationActions: [Deny]

@@ -52,7 +52,8 @@ for (const [i, c] of cases.entries()) {
 const overall = results.reduce((a, r) => a + r.score, 0) / (results.length || 1);
 const secs = results.map(r => r.seconds).sort((a, b) => a - b);
 console.log(`\nOverall ${(overall * 100).toFixed(0)}% · ${results.filter(r => r.score === 1).length}/${results.length} fully passed · median ${secs[Math.floor(secs.length / 2)]?.toFixed(1)} s`);
-const file = new URL(`./report-${new Date().toISOString().replace(/[:.]/g, '-')}.json`, import.meta.url);
+// EVAL_REPORT: where to write the report (CI compares a preview's against production's); default a dated file here.
+const file = process.env.EVAL_REPORT ? new URL(`file://${new URL(process.env.EVAL_REPORT, `file://${process.cwd()}/`).pathname}`) : new URL(`./report-${new Date().toISOString().replace(/[:.]/g, '-')}.json`, import.meta.url);
 fs.writeFileSync(file, JSON.stringify({ at: new Date().toISOString(), base, overall, results }, null, 2));
 console.log(`Report: ${file.pathname}`);
 process.exit(0);

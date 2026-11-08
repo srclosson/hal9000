@@ -3,3 +3,4 @@ node_modules/
 auditions/
 evals/report-*.json
 .DS_Store
+public/assets/observability.js

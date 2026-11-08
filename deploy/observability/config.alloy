@@ -1,0 +1,62 @@
+// Optional self-hosted collector example, not included in HAL's base deployment.
+// Keep 4318 internal. Put 12347 behind HTTPS ingress with an exact browser origin.
+otelcol.receiver.otlp "hal" {
+  http {
+    endpoint = "0.0.0.0:4318"
+  }
+  output {
+    metrics = [otelcol.processor.batch.hal.input]
+    logs    = [otelcol.processor.batch.hal.input]
+    traces  = [otelcol.processor.batch.hal.input]
+  }
+}
+
+otelcol.processor.batch "hal" {
+  output {
+    metrics = [otelcol.exporter.otlphttp.upstream.input]
+    logs    = [otelcol.exporter.otlphttp.upstream.input]
+    traces  = [otelcol.exporter.otlphttp.upstream.input]
+  }
+}
+
+// A unified OTLP gateway (for example Grafana Cloud OTLP or your existing relay).
+otelcol.exporter.otlphttp "upstream" {
+  client {
+    endpoint = sys.env("OTLP_UPSTREAM_URL")
+    headers  = { "Authorization" = sys.env("OTLP_UPSTREAM_AUTHORIZATION") }
+  }
+}
+
+// Self-hosted Faro -> Loki and Tempo through the gateway above.
+// For Grafana Cloud Frontend Observability use its collector URL directly instead of faro.receiver.
+faro.receiver "hal" {
+  log_format = "json"
+  server {
+    listen_address           = "0.0.0.0"
+    listen_port              = 12347
+    cors_allowed_origins     = [sys.env("HAL_PUBLIC_ORIGIN")]
+    max_allowed_payload_size = "1MiB"
+    rate_limiting {
+      rate       = 50
+      burst_size = 100
+    }
+  }
+  // Do not let arbitrary browser payloads make the collector fetch internal URLs.
+  sourcemaps {
+    download = false
+  }
+  output {
+    logs   = [loki.write.faro.receiver]
+    traces = [otelcol.processor.batch.hal.input]
+  }
+}
+
+loki.write "faro" {
+  endpoint {
+    url = sys.env("LOKI_PUSH_URL")
+    basic_auth {
+      username = sys.env("LOKI_USER")
+      password = sys.env("LOKI_TOKEN")
+    }
+  }
+}

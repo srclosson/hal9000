@@ -1,6 +1,6 @@
 // Offline shell: network first (always fresh when the server is up), cache when it isn't.
-const CACHE = 'nine-thousand-v11';
-const SHELL = ['/', '/index.html', '/eye.html', '/monitor.html', '/base.css', '/shared.js', '/displays.js', '/manifest.webmanifest', '/icons/icon.svg'];
+const CACHE = 'nine-thousand-v14';
+const SHELL = ['/', '/index.html', '/eye.html', '/monitor.html', '/base.css', '/shared.js', '/protocol.js', '/chat.js', '/uis.js', '/displays.js', '/dashboard.html', '/manifest.webmanifest', '/icons/icon.svg'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));
@@ -10,7 +10,8 @@ self.addEventListener('activate', e => {
 });
 self.addEventListener('fetch', e => {
   const url = new URL(e.request.url);
-  if (e.request.method !== 'GET' || url.pathname.startsWith('/api') || url.pathname.startsWith('/qr')) return;
+  // Never cache cross-origin collectors, auth redirects, or runtime telemetry configuration.
+  if (url.origin !== self.location.origin || e.request.method !== 'GET' || url.pathname.startsWith('/api') || url.pathname.startsWith('/qr') || url.pathname.startsWith('/auth/')) return;
   const key = url.pathname === '/eye' || url.pathname === '/monitor' ? url.pathname + '.html' : e.request;
   e.respondWith(caches.open(CACHE).then(async c => {
     try {

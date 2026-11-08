@@ -10,6 +10,16 @@
 //     it before), Aiden's runbooks, and the tools a plan may use; otherwise on the signals. Without an LLM (or if it
 //     fails), the scores alone decide and there is no fix line.
 //
+//   Dig in (after each composition, one at a time, while nobody is mid-conversation): for each problem on the board
+//     the 9000 investigates on its own with read-only tools (brain.digIn, passed to start), as it would if asked, and
+//     the card then shows what it found and its advice, not a step for a person to go and look. A problem is dug
+//     into again after DIG_AGAIN_MS, or sooner if it gets worse.
+//
+//   Forecast (every forecast.everyMinutes, off by default; ahead.js): node memory, disk and restarts forecast by the
+//     mlforecast MCP server. A series gets a panel, after the live problems, only when it is forecast to cross its
+//     threshold within the horizon and its backtest beats a seasonal-naive baseline; the scorecard judges each one by
+//     whether the crossing happened.
+//
 // Each panel is one cluster, coded by cluster (RET, GAM, HLT...), showing its most notable signal; the board itself
 // is an ordinary live board (boards/index.js) so it refreshes, colours and tours like any other.
 
@@ -19,6 +29,11 @@ import { current as currentModel, background } from '../llm/index.js';
 import * as snooze from '../snooze/index.js';
 import * as config from '../config/index.js';
 import * as memory from '../memory/index.js';
+import * as scorecard from '../scorecard/index.js';
+import * as knowhow from '../knowhow/index.js';
+import * as confidence from '../confidence/index.js';
+import * as ahead from './ahead.js';
+import * as resume from '../resume/index.js';
 
 const DATASOURCE = process.env.BOARD_DATASOURCE || 'metrics';
 // Live settings (config/index.js): survey interval, re-ranking interval, and how many panels at most.
@@ -194,7 +209,8 @@ async function curate(candidates) {
     `"quick" for a known small change a person can make in minutes; "project" when it needs real engineering or many steps; ` +
     `Always give the single most likely fix, even when it is not yet confirmed: a well-grounded hypothesis is what the person wants ` +
     `(memory says hubble-relay's peer certificate expired → "renew hubble-relay's peer TLS certificate", quick). ` +
-    `Use "unknown" only when nothing above points to any cause, and then the fix is the one most telling check ("check kubelet status on the 16 not-ready nodes"). ` +
+    `Use "unknown" only when nothing above points to any cause, and then the fix is your best guess at the cause, said as one ("possibly kubelet down on the 16 not-ready nodes"). ` +
+    `Write every fix as advice, never as a step to go and look ("inspect", "check", "review"): the 9000 digs into each card itself straight after this. ` +
     `Base the fix on what is known for that cluster (memory, runbooks, what is behind it) when it fits, else on the signals; name the service, pod or node; never invent a cause the evidence does not suggest. ` +
     `basis says which: "memory", "runbook", "signals" or "none". ` +
     `JSON: [{"cluster": "...", "signal": "ERR", "insight": "...", "fix": "...", "effort": "quick", "basis": "memory"}]`;
@@ -241,6 +257,8 @@ function worth(c) {
 
 function build(candidates) {
   const items = candidates.map(worth).filter(Boolean);
+  const coming = items.length ? [] : ahead.panels(shortName).slice(0, SLOTS());
+  if (coming.length) return { title: 'Situation', home: true, window: 60, panels: coming };   // nothing wrong now, something on its way
   if (!items.length) {
     const hidden = snooze.active().length;
     return { title: 'Situation', home: true, window: 60, panels: [{
@@ -261,21 +279,32 @@ function build(candidates) {
     const s = SIGNALS.find(x => x.key === p?.signal) ?? top;
     const sig = c.signals.find(x => x.key === s.key) ?? top;
     const key = snoozeKey === 'ALR' ? 'ALR' : s.key;
+    const d = dug.get(digKey(c.cluster, s.key)), found = d?.finding ? d : null;
+    const guess = p?.fix && { text: String(p.fix).slice(0, 80), effort: p.effort, basis: ['memory', 'runbook', 'signals'].includes(p.basis) ? p.basis : 'none' };
+    // What it found when it dug in, else the first guess from curation (marked while it is still looking).
+    const fix = found?.advice ? { text: found.advice.slice(0, 110), effort: found.effort, basis: 'investigated', finding: found.detail, ...(d.digging && { digging: true }), ...(d.runbooks?.length && { runbooks: d.runbooks }) }
+      : guess ? { ...guess, ...(d?.digging && { digging: true }) }
+      : d?.digging ? { text: 'Looking into it', effort: 'unknown', basis: 'none', digging: true } : null;
     return {
       code: codeFor(c.cluster, taken),
       title: `${shortName(c.cluster)} · ${s.name}`,
       kind: s.kind, unit: s.unit, warn: s.warn, crit: s.crit,
       query: s.one(c.cluster),
-      insight: (p?.insight || fallbackInsight({ ...c, top: sig })).slice(0, 90),
-      // The most likely fix and what it takes, from curation (none on a score-only board).
-      ...(p?.fix && { fix: { text: String(p.fix).slice(0, 80), effort: p.effort, basis: ['memory', 'runbook', 'signals'].includes(p.basis) ? p.basis : 'none' } }),
+      insight: (found?.finding || p?.insight || fallbackInsight({ ...c, top: sig })).slice(0, 90),
+      // The advice and what it takes: from digging in, else curation's first guess (none on a score-only board).
+      ...(fix && { fix }),
+      dig: { signal: s.key, level: sig?.level ?? level, about: `${c.cluster}: ${c.signals.filter(x => x.level >= 1).map(describeSignal).join('; ') || describeSignal(sig)}; alerts firing ${c.alerts.firing}`, guess: guess?.text },
       baseline: sig?.baseline,   // new / worsening / chronic, shown as a tag
+      // The confidence forecast for its dig (confidence/): shown on the card, with its blind spots as a to-do.
+      ...(d?.forecast && { forecast: { confidence: d.forecast.confidence, alert: d.forecast.alert, reasons: d.forecast.reasons, blindSpots: d.forecast.blindSpots, probation: d.forecast.probation ?? null } }),
       cluster: c.cluster,
       // What "snooze" on this panel hides: this cluster's signal (or its alerts), at today's level.
       snooze: { key: snooze.keyOf(c.cluster, key), level: key === 'ALR' ? level : sig.level, value: sig.value,
         label: key === 'ALR' ? `${shortName(c.cluster)} alerts` : `${shortName(c.cluster)} ${s.name}` },
     };
   });
+  // Forecasts take whatever room the live problems leave.
+  panels.push(...ahead.panels(shortName, taken).slice(0, Math.max(0, SLOTS() - panels.length)));
   return { title: 'Situation', home: true, window: 60, panels };
 }
 
@@ -300,21 +329,200 @@ async function compose(force) {
     picks = worthy.length ? (await curate(worthy.map(c => ({ ...c, signals: c.signals.filter(x => !snooze.isSnoozed(c.cluster, x.key, x.level)) })))) ?? null : null;
     lastCurated = Date.now();
   }
-  const next = build(candidates);
-  const changed = JSON.stringify(next.panels.map(p => [p.code, p.query, p.insight, p.fix])) !== JSON.stringify(spec?.panels.map(p => [p.code, p.query, p.insight, p.fix]));
+  publish(build(candidates));
+  digInto(spec);
+  // Forecasts run beside the survey (a call can take a minute or more); the board is rebuilt when they change.
+  if (ahead.due()) ahead.check().then(changed => changed && latestSurvey.length && publish(build(latestSurvey))).catch(err => console.error('Forecasts:', err.message));
+  // The scorecard: a dug-into problem that is no longer a problem (anywhere, not only on the board) cleared, unless
+  // it was snoozed.
+  const onBoard = new Set(candidates.flatMap(c => c.signals.filter(s => s.level >= 1).map(s => digKey(c.cluster, s.key))));
+  scorecard.board(onBoard, key => { const [cluster, signal] = key.split(':'); return snooze.isSnoozed(cluster, signal, 1); });
+}
+
+// The dig key of a card on the board, by its panel code (for a person's thumbs on it).
+export const cardKey = code => { const p = spec?.panels.find(x => x.code === code && x.dig); return p ? digKey(p.cluster, p.dig.signal) : null; };
+
+function publish(next) {
+  const changed = JSON.stringify(next.panels.map(p => [p.code, p.query, p.insight, p.fix, p.forecast])) !== JSON.stringify(spec?.panels.map(p => [p.code, p.query, p.insight, p.fix, p.forecast]));
   spec = next;
   if (changed) onChange(spec);
+}
+
+// ---- digging in -----------------------------------------------------------------------------------------------
+
+const DIG_AGAIN_MS = 30 * 60_000;
+const dug = new Map();   // "cluster:signal" -> { at, level, digging, finding, detail, advice, effort, runbooks: [{ ref, title, status, url }] }
+const digKey = (cluster, signal) => `${cluster}:${signal}`;
+// Kept across a restart (resume/): what each dig found (with its runbooks and confidence forecast) and the last
+// curation, so a rollout doesn't dig into everything again or show "Looking into it" on problems it already knows.
+resume.register('situation-board', {
+  save: () => ({ dug: resume.fit([...dug].filter(([, d]) => d.finding).map(([k, d]) => [k, { ...d, digging: false }]), 150_000), picks, lastCurated }),
+  restore: d => {
+    for (const [k, v] of d.dug ?? []) if (!dug.has(k)) dug.set(k, { ...v, digging: false });
+    if (!picks && d.picks) { picks = d.picks; lastCurated = d.lastCurated ?? 0; }
+  },
+});
+let dig = null, digging = false;
+const queue = [];
+
+function digInto(board) {
+  if (!dig) return;
+  for (const [k, d] of dug) if (!d.digging && Date.now() - d.at > 4 * DIG_AGAIN_MS) dug.delete(k);
+  for (const p of board.panels) {
+    if (!p.dig) continue;
+    const k = digKey(p.cluster, p.dig.signal), d = dug.get(k);
+    if (d?.digging || (d && Date.now() - d.at < DIG_AGAIN_MS && p.dig.level <= d.level)) continue;
+    dug.set(k, { ...d, at: d?.at ?? 0, level: p.dig.level, digging: true });
+    queue.push({ k, p });
+  }
+  if (queue.length) { publish(build(latestSurvey)); drain(); }   // the cards say it is looking
+}
+
+async function drain() {
+  if (digging) return;
+  digging = true;
+  try {
+    while (queue.length) {
+      const { k, p } = queue.shift(), t0 = Date.now();
+      // What worked before: a known problem starts from its runbook, and the standing orders apply.
+      const known = await knowhow.advise({ text: p.dig.about, clusters: [p.cluster], signals: [p.dig.signal] });
+      // How confused it is likely to be, from its past digs and its tools' health here; the card shows it while it looks.
+      const f = await confidence.forecast(k, p.cluster).catch(() => null);
+      if (f) {
+        dug.set(k, { ...dug.get(k), forecast: f });
+        if (latestSurvey.length) publish(build(latestSurvey));
+        if (f.alert || f.blindSpots.length) console.log(`Confidence: ${k} forecast ${f.confusion ?? '?'}${f.alert ? ' (likely to trip the confusion alert)' : ''}; ${f.reasons.join('; ')}`);
+      }
+      const out = await dig(digQuestion(p, known, f)).catch(() => null), r = readDig(out?.reply);
+      await confidence.record(k, p.cluster, out?.turn).catch(() => {});
+      // The forecast, scored against what happened: within 0.2 of the dig's confusion is likely right.
+      if (f?.confusion != null && out?.turn) {
+        const actual = out.turn.confusion, fc = scorecard.record('forecast', { key: k, about: `${k}: forecast ${f.confusion.toFixed(2)}, was ${actual.toFixed(2)}` });
+        scorecard.judge(fc, Math.abs(actual - f.confusion) <= 0.2 ? 'likely_right' : 'wrong', `forecast ${f.confusion.toFixed(2)}, actual ${actual.toFixed(2)}`);
+      }
+      if (r?.effort === 'auto' && !mcp.approvalTools().length) r.effort = 'quick';
+      // A case for the scorecard: judged later by whether the problem clears, is snoozed, or a person rates the card.
+      const c = scorecard.record('dig', { key: k, about: r ? `${p.cluster}: ${r.finding}` : `${p.cluster}: ${p.dig.about}`, ms: out?.ms ?? Date.now() - t0, tokens: out?.tokens ?? 0 });
+      if (!r) scorecard.judge(c, 'failed', 'no conclusion');
+      const runbooks = r ? await runbooksFor(k, p, r, known) : dug.get(k)?.runbooks;
+      dug.set(k, { ...(r ?? dug.get(k)), ...(runbooks?.length && { runbooks }), ...(f && { forecast: f }), at: Date.now(), level: p.dig.level, digging: false });
+      console.log(`Situation board: dug into ${k} in ${Math.round((Date.now() - t0) / 1000)} s: ${r ? r.finding : 'no conclusion'}`);
+      if (latestSurvey.length) publish(build(latestSurvey));
+    }
+  } finally { digging = false; }
+}
+
+// The runbooks for the card, one per separate cause the dig found: one Know-how already has that covers the cause,
+// else a draft written from this dig when a person has to act. A cause already drafted from this problem (it shares
+// a service with that draft, from any of the cluster's problems) updates the draft instead, unless a person has edited it. A person reviews drafts in Know-how.
+const MAX_RUNBOOKS = 4;
+async function runbooksFor(k, p, r, known) {
+  const out = [];
+  const entry = (rb, title) => ({ ref: rb.ref, title: (title ?? rb.runbook ?? rb.title ?? '').slice(0, 80), status: rb.status, url: knowhow.link(rb.ref), services: rb.services ?? [] });
+  const remembered = dug.get(k)?.runbooks ?? [];
+  if (!r.runbooks?.length) { const have = knowhow.covering(known); return have ? [entry(have, have.runbook)] : remembered; }
+  // What was drafted from this cluster's problems before, here or (after a restart) only in Know-how.
+  const earlier = await knowhow.draftsFrom(`situation board ${p.cluster}:`);
+  // Know-how didn't answer (a timeout): drafting now could duplicate what it already has, so wait for the next dig.
+  if (earlier === null) return remembered;
+  const prior = [...remembered, ...earlier.map(d => entry(d)).filter(d => !remembered.some(x => x.ref === d.ref))];
+  const used = new Set();
+  for (const rb of r.runbooks.slice(0, MAX_RUNBOOKS)) {
+    const services = rb.services?.length ? rb.services : r.services ?? [];
+    // The closest earlier draft: most services in common, then the narrowest (so one that bundled several causes
+    // isn't taken for each of them); each is matched once.
+    // "tempo" and "tempo-ingester" are the same service here.
+    const alike = (a, b) => a === b || a.startsWith(`${b}-`) || b.startsWith(`${a}-`);
+    const shared = x => x.services.filter(s => services.some(t => alike(s, t))).length;
+    const again = prior.filter(x => !used.has(x.ref) && shared(x)).sort((a, b) => shared(b) - shared(a) || a.services.length - b.services.length)[0];
+    if (again) {
+      used.add(again.ref);
+      if (again.status === 'draft' && r.effort !== 'auto') await knowhow.redraft(again.ref, { title: rb.title.slice(0, 200), steps: rb.steps });
+      out.push({ ...again, title: rb.title.slice(0, 80) });
+      continue;
+    }
+    const advice = await knowhow.advise({ text: rb.title, services, clusters: [p.cluster], signals: [p.dig.signal] });
+    if (!advice) continue;   // no answer: it may already have a runbook for this
+    const have = knowhow.covering(advice);
+    if (have) { out.push(entry(have, have.runbook)); continue; }
+    if (r.effort === 'auto') continue;
+    const d = await knowhow.draft({ title: rb.title.slice(0, 200), source_ref: `situation board ${k}`,
+      when: { text: `${rb.title}. ${p.dig.about}`, clusters: [p.cluster], signals: [p.dig.signal], services }, steps: rb.steps });
+    if (d) { console.log(`Situation board: drafted ${d.ref} in Know-how for ${k}: ${rb.title}`); out.push(entry({ ...d, services }, rb.title)); }
+  }
+  return out;
+}
+
+export function digQuestion(p, known = null, f = null) {
+  const kb = knowhow.brief(known), blind = confidence.brief(f);
+  return `[Automatic: nobody asked. A problem has just reached your situation board and you are digging into it yourself, in the background, before anyone looks: ${p.dig.about}.` +
+    `${p.dig.guess ? ` Your first guess, before looking: ${p.dig.guess}.` : ''} You can only look: read-only tools, nothing on the monitors, no plans, nothing is spoken. ` +
+    `${kb ? `\n${kb}\nIf a runbook above fits, run its read-only steps first and say whether it applies; follow the standing orders in your advice.\n` : ''}` +
+    `${blind ? `\n${blind}\n` : ''}` +
+    `Find the cause. Start with investigate for the cluster. For crash loops and restarts: why each container last ended (reason, exit code), its last log lines, and what it was missing (memory, a dependency, a config or secret). ` +
+    `For errors or latency: the failing service's logs, traces and recent changes. For nodes: their conditions. Follow what you find a step or two further rather than stopping at the first clue.\n` +
+    `Then reply with exactly these labelled parts and nothing else:\n` +
+    `FINDING: what is wrong, at most 12 words, naming the pod, service or node.\n` +
+    `DETAIL: the evidence, at most 50 words: reasons, exit codes, log lines, numbers, and anything you could not see.\n` +
+    `ADVICE: what you would suggest to an SRE and why, at most 16 words; never a step to go and look at something, since you have looked.\n` +
+    `EFFORT: auto (a plan tool can do it), quick, project or unknown.\n` +
+    `SERVICES: the workloads or services involved, comma-separated, or none.\n` +
+    `RUNBOOKS: only when a person has to act: a JSON array with one runbook per separate cause you found (separate problems, separate runbooks; at most ${MAX_RUNBOOKS}), each ` +
+    `{"title":"the cause, at most 10 words","services":["tempo-ingester"],"steps":[...]}. Steps, in order: first the read-only lookups you actually ran that showed the cause, as look steps ` +
+    `with their tool, args and what you saw, e.g. {"kind":"look","text":"Read the ingester's last termination log","tool":"k8s_logs","args":{"namespace":"observability","pod_name":"tempo-ingester-0","previous":true},"saw":"failed to init store: access denied"}; ` +
+    `then the act steps; then a check step, e.g. {"kind":"check","text":"How to tell it worked","command":"kubectl -n observability get pods -l app=tempo -w","expect":"2/2 ready, no restarts for 30 minutes"}. ` +
+    `Write every act and check step for a junior engineer who doesn't know the commands: each has a "command" they can paste, with the real namespaces, pod, deployment, PVC and secret names you found ` +
+    `(several lines are fine, as \\n in the JSON string), and its "text" says in plain words what the command does and why. ` +
+    `Always include the act steps, with commands, even when the change is someone else's to make (the storage, database or app owner): they are what that person types, ` +
+    `e.g. replacing a secret from a local file without showing it: kubectl -n observability create secret generic tempo-s3 --from-env-file=tempo-s3.env --dry-run=client -o yaml | kubectl apply -f -; ` +
+    `or pinning an image: kubectl -n nextcloud set image deployment/nextcloud nextcloud=nextcloud:30-apache. Never only "have the owner fix it", and never an echo or a STOP note in place of a command: when you could not confirm a value ` +
+    `(an image tag, the secret's name, a backup path), write the real command with a <placeholder> for it and add a look step just before with the command that finds it ` +
+    `(e.g. kubectl -n observability get secrets, or kubectl -n nextcloud exec deploy/nextcloud -- cat /var/www/html/version.php); put the caution in the step's "text". Anything that could lose data comes after a step that backs it up, with the actual backup command ` +
+    `(e.g. kubectl -n nextcloud exec deploy/nextcloud -- tar czf - /var/www/html/data > nextcloud-data.tgz, or kubectl -n ghost exec ghost-mysql-0 -- sh -c 'mysqldump -u root -p"$MYSQL_ROOT_PASSWORD" --all-databases' > ghost.sql, which reads the password inside the pod); ` +
+    `use --dry-run=server first where kubectl supports it. ` +
+    `look and check steps are read-only; act steps are the change. Never include a secret's value: say where it lives, or read it from an environment variable as above. NONE when a plan tool can do it.]`;
+}
+
+export function readDig(text) {
+  // The reply comes back raw (brain.js): labels may be bold and parts span lines. The labelled parts are read from a
+  // flattened copy; the runbooks from the raw text, so their commands keep _ > | and line breaks.
+  const t = String(text ?? ''), flat = t.split(/RUNBOOKS?:/i)[0].replace(/\*\*|__|`|^#+\s*/gm, '').replace(/\s+/g, ' ');
+  const m = flat.match(/FINDING:\s*(.+?)\s*DETAIL:\s*(.+?)\s*ADVICE:\s*(.+?)\s*EFFORT:\s*(auto|quick|project|unknown)/i);
+  if (!m) return null;
+  const out = { finding: m[1].replace(/\.$/, ''), detail: m[2], advice: m[3].replace(/\.$/, ''), effort: m[4].toLowerCase() };
+  const sv = flat.match(/SERVICES:\s*(.+?)\s*(?=RUNBOOKS?:|$)/is)?.[1];
+  if (sv && !/^none\.?$/i.test(sv.trim())) out.services = sv.split(',').map(x => x.trim().replace(/\.$/, '')).filter(Boolean).slice(0, 8);
+  const rb = t.split(/RUNBOOKS?:/i)[1];
+  if (rb && rb.includes('[')) {
+    try {
+      const raw = JSON.parse(rb.slice(rb.indexOf('['), rb.lastIndexOf(']') + 1));
+      const stepsOf = a => (Array.isArray(a) ? a.filter(s => s && ['look', 'act', 'check'].includes(s.kind) && s.text).slice(0, 12) : []);
+      // One runbook per cause ({ title, services, steps }), or (the older form) one list of steps for the finding.
+      const books = Array.isArray(raw) && raw.some(x => x?.steps) ? raw.filter(x => x?.title && x.steps).map(x => ({ title: String(x.title), services: Array.isArray(x.services) ? x.services.map(String).slice(0, 8) : [], steps: stepsOf(x.steps) }))
+        : [{ title: out.finding, services: out.services ?? [], steps: stepsOf(raw) }];
+      const ok = books.filter(b => b.steps.length);
+      if (ok.length) out.runbooks = ok;
+    } catch { /* not JSON: no runbooks */ }
+  }
+  return out;
 }
 
 // start({ onChange(spec) }): survey now and every minute; onChange fires whenever the composition changes.
 export function start(handlers) {
   if (!mcp.names().includes('query_prometheus')) return false;
   onChange = handlers.onChange ?? onChange;
+  dig = handlers.digIn ?? null;
   const run = force => cycle(force).catch(err => console.error('Situation board:', err.message));
   run(true);
   const next = () => setTimeout(() => { run(false); next(); }, SURVEY_MS()).unref?.();   // re-read the interval each time
   next();
   config.onChange(() => recompose());   // board size or other settings changed: recompose now
+  // The scorecard names the blind spots: tools that keep failing on a cluster, a to-do for a person.
+  scorecard.addNotes(async () => {
+    const b = await confidence.blindSpots();
+    return b.length ? ['Blind spots (tools that keep failing for me; I work around them until someone fixes them):',
+      ...b.map(x => `- ${x.tool} on ${x.cluster}: ${x.failed} of its last ${x.calls} calls failed`)] : [];
+  });
   console.log('Situation board: surveying every 60 s, curated every 5 min');
   return true;
 }
@@ -327,8 +535,9 @@ export function summary() {
   if (!spec) return 'The situation board has not been composed yet.';
   const body = spec.panels[0]?.code === 'ALL' && spec.panels.length === 1 ? spec.panels[0].text
     : `The situation board (the monitors' home screen) shows only clusters with a real, unsnoozed problem, most important first:\n` +
-      spec.panels.map((p, i) => `${i + 1}. ${p.code} ${p.title}: ${p.insight}${p.fix ? ` — likely fix (${p.fix.effort}${p.fix.basis !== 'none' ? `, from ${p.fix.basis}` : ''}): ${p.fix.text}` : ''}${p.baseline && p.baseline !== 'normal' ? ` [${p.baseline}${p.baseline === 'chronic' ? ': as bad at this time yesterday' : p.baseline === 'new' ? ': fine at this time yesterday' : ''}]` : ''}`).join('\n');
-  return `${body}\n${snooze.describe()}`;
+      spec.panels.map((p, i) => `${i + 1}. ${p.code} ${p.title}: ${p.insight}${p.fix ? p.fix.basis === 'investigated' ? ` — you dug in: ${p.fix.finding}; your advice (${p.fix.effort}): ${p.fix.text}` : ` — likely fix (${p.fix.effort}${p.fix.basis !== 'none' ? `, from ${p.fix.basis}` : ''}): ${p.fix.text}${p.fix.digging ? ' (you are digging into it now)' : ''}` : ''}${p.baseline && p.baseline !== 'normal' ? ` [${p.baseline}${p.baseline === 'chronic' ? ': as bad at this time yesterday' : p.baseline === 'new' ? ': fine at this time yesterday' : ''}]` : ''}`).join('\n');
+  const coming = ahead.summary();
+  return `${body}${coming ? `\n${coming}` : ''}\n${snooze.describe()}`;
 }
 
 // ---- tool for the model ----------------------------------------------------------------------------------------

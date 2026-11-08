@@ -20,6 +20,7 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import * as config from '../config/index.js';
+import { PREVIEW, refused } from '../preview.js';
 
 // The memory server's search and store tools (settings memory.findTool / memory.storeTool) are the 9000's own
 // (memory/index.js wraps them), so they are taken as internal on any server that offers them, whatever its allowlist.
@@ -131,13 +132,20 @@ export const onSync = fn => synced.push(fn);
 
 // Connects every server from MCP_SERVERS, then the ones configured in settings (and keeps those in step).
 export async function start(env = process.env) {
-  for (const cfg of parseConfig(env.MCP_SERVERS)) await add(cfg, 'env');
+  const own = parseConfig(env.MCP_SERVERS);
+  for (const cfg of own) await add(cfg, 'env');
   await syncSettings();
-  setInterval(() => syncSettings().catch(err => console.error('MCP settings:', err.message)), 60_000).unref();
+  setInterval(() => {
+    // A built-in server that could not be reached (it started after the 9000, say) is tried again each minute.
+    for (const cfg of own) if (servers.find(x => x.name === cfg.name && x.source === 'env')?.failed) { drop(cfg.name); add(cfg, 'env').then(() => { for (const fn of synced) fn(); }); }
+    syncSettings().catch(err => console.error('MCP settings:', err.message));
+  }, 60_000).unref();
 }
 
+// A preview (preview.js) offers only tools that read.
+const offered = ([n, t]) => !t.internal && !t.approval && !hidden.has(n) && !(PREVIEW && changes(t.tool));
 export function list() {
-  return [...tools].filter(([n, t]) => !t.internal && !t.approval && !hidden.has(n)).map(([name, { tool }]) => ({
+  return [...tools].filter(offered).map(([name, { tool }]) => ({
     name,
     description: tool.description ?? '',
     inputSchema: tool.inputSchema ?? { type: 'object', properties: {} },
@@ -150,7 +158,7 @@ export const status = () => servers.map(s => ({ name: s.name, source: s.source, 
   connected: !s.failed, tools: [...tools].filter(([, t]) => t.server === s && !t.internal && !t.approval).map(([n]) => n),
   ask: [...tools].filter(([, t]) => t.server === s && t.approval).map(([n]) => n) }));
 
-export const names = () => [...tools].filter(([n, t]) => !t.internal && !t.approval && !hidden.has(n)).map(([name]) => name);
+export const names = () => [...tools].filter(offered).map(([name]) => name);
 // Tools the 9000 wraps in its own (memory/index.js wraps a memory server's find and store): kept from the model's
 // list and the access summary, since it reaches them through the wrappers.
 const hidden = new Set();
@@ -159,7 +167,7 @@ export const hide = names => { hidden.clear(); for (const n of names) if (n) hid
 // not; approval tools are never resolved this way. null when no connected server has it.
 export const resolve = base => (base ? [...tools].find(([n, t]) => !t.approval && (sameName(n, base) || sameName(t.tool.name, base)))?.[0] ?? null : null);
 // "Ask first" tools, for plans: what each does and takes, and which server it is on.
-export const approvalTools = () => [...tools].filter(([, t]) => t.approval).map(([name, { server, tool }]) => ({
+export const approvalTools = () => [...tools].filter(([, t]) => t.approval && !PREVIEW).map(([name, { server, tool }]) => ({
   name, server: server.name, description: tool.description ?? '', inputSchema: tool.inputSchema ?? { type: 'object', properties: {} },
   destructive: tool.annotations?.destructiveHint === true }));
 export const serverOf = name => tools.get(name)?.server.name ?? null;
@@ -207,16 +215,23 @@ export function describe(name, args = {}) {
 // Internal tools need { internal: true }: the model's tool calls can never reach them. Internal results are not
 // trimmed (they're parsed by the 9000's own code, not read by the model).
 // "Ask first" tools need { approved: true }, which only fixes/index.js passes, for a step of an approved plan.
-export async function call(name, args, { internal = false, approved = false } = {}) {
+// wait: for a call the 9000 can hold (held/index.js): { signal, onprogress, timeout } instead of the 20 s limit.
+export async function call(name, args, { internal = false, approved = false, wait } = {}) {
   const entry = tools.get(name);
   if (!entry || (entry.internal && !internal) || (entry.approval && !approved)) return `Error: no tool named ${name}.`;
   const { server, tool } = entry;
-  const run = () => server.client.callTool({ name: tool.name, arguments: args ?? {} }, undefined, { timeout: CALL_TIMEOUT_MS });
+  // A preview changes nothing; memory writes are let through (memory/index.js sends them to a scratch collection).
+  if (PREVIEW && (approved || entry.approval || (changes(tool) && !(internal && isMemoryTool(name))))) return refused(`${tool.name} (it changes things)`);
+  const options = wait ? { timeout: wait.timeout, signal: wait.signal, onprogress: wait.onprogress, resetTimeoutOnProgress: !!wait.onprogress } : { timeout: CALL_TIMEOUT_MS };
+  const run = () => server.client.callTool({ name: tool.name, arguments: args ?? {} }, undefined, options);
   try {
     let result;
     try { result = await run(); }
     catch (err) {
-      // Sessions can expire on the server side: reconnect once and retry.
+      // Sessions can expire on the server side: reconnect once and retry. Never after a timeout or a cancel (the
+      // server may still be working on it), and a tool that changes things only when the server said it had no
+      // session, so the first call never ran: a slow chat with another agent must not be sent twice.
+      if (!retryable(err, tool)) throw err;
       console.warn(`MCP: ${server.name}.${tool.name} failed (${err.message}); reconnecting`);
       await connect(server);
       result = await run();
@@ -226,6 +241,20 @@ export async function call(name, args, { internal = false, approved = false } = 
     return result.isError ? `Error from ${tool.name}: ${body}` : (body || '(no results)');
   } catch (err) {
     console.error(`MCP: ${server.name}.${tool.name}: ${err.message}`);
+    if (timedOut(err)) return `Error: ${tool.name} did not answer within ${Math.round((wait?.timeout ?? CALL_TIMEOUT_MS) / 1000)} s. It was not asked again: it may still be working on it.`;
     return `Error: ${tool.name} is unavailable right now (${err.message}).`;
   }
+}
+
+// McpError RequestTimeout is -32001; a cancel is an AbortError.
+const timedOut = err => err?.code === -32001 || /timed? ?out/i.test(err?.message ?? '');
+const cancelled = err => err?.name === 'AbortError' || /abort/i.test(err?.message ?? '');
+const noSession = err => err?.code === 404 || (err?.code === 400 && /session/i.test(err?.message ?? ''));
+export const retryable = (err, tool) => !timedOut(err) && !cancelled(err) && (noSession(err) || !changes(tool));
+
+// Is the server behind a tool still there? Resolves true or false within 10 s (an MCP ping, the spec's liveness check).
+export async function alive(name) {
+  const server = tools.get(name)?.server;
+  if (!server?.client) return false;
+  try { await server.client.ping({ timeout: 10_000 }); return true; } catch { return false; }
 }

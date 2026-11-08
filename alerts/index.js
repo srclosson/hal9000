@@ -24,12 +24,19 @@ const applyOverrides = r => { const st = testOverrides()[r?.uid]; return st ? { 
 const RULES_TOOL = 'alerting_manage_rules';
 const NOTES_MAX = 900;
 
-export const available = () => mcp.hasInternal(RULES_TOOL);
+// Alerts that come from elsewhere than Grafana: the booth game's (game/index.js), made from its ship's state. They are
+// listed and described like Grafana's; with no Grafana configured, they are the only ones.
+let extra = null;
+export const setExtra = fn => { extra = fn; };
+const grafana = () => mcp.hasInternal(RULES_TOOL);
+export const available = () => grafana() || !!extra;
 
 // Every alert rule, raw (for the watcher). null when Grafana can't be read.
 export async function allRules() {
+  const more = extra?.() ?? [];
+  if (!grafana()) return extra ? more : null;
   const all = await rules({ operation: 'list', rule_limit: 500 });
-  return Array.isArray(all) ? all.map(applyOverrides) : null;
+  return Array.isArray(all) ? [...all.map(applyOverrides), ...more] : null;
 }
 
 async function rules(args) {
@@ -110,6 +117,9 @@ export async function rule(uid) {
 
 async function getAlert({ uid } = {}) {
   if (!uid) return 'Error: get_alert needs a uid from list_alerts.';
+  const own = (extra?.() ?? []).find(r => r.uid === uid);
+  if (own) return [`Alert "${own.title}" uid=${own.uid}`, `State: ${own.state}; severity ${own.labels.severity}; service ${own.labels.service}.`,
+    `Summary: ${own.annotations.summary}`, 'This alert is raised from the ship\'s own device readings and self-tests; check the device itself for the detail.'].join('\n');
   const r = applyOverrides(await rules({ operation: 'get', rule_uid: uid }));
   if (!r?.uid) return `Error: no alert rule with uid ${uid}.`;
   const l = r.labels ?? {}, a = r.annotations ?? {};

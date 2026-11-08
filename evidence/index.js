@@ -29,6 +29,24 @@ async function signal(rule) {
   return { now, ago, max: Math.max(...pts.map(p => p[1])), crossedAt: crossed?.[0] ?? null };
 }
 
+// For each pod: "ns/pod (container): last ended OOMKilled, exit 137; its last lines: …". Loki's pod label differs by
+// collector (pod, k8s_pod_name), so both are tried.
+async function lastWords(C, pods) {
+  const re = pods.map(p => esc(p.pod)).join('|');
+  const [reasons, codes] = await Promise.all([
+    prom(`max by (namespace, pod, container, reason) (kube_pod_container_status_last_terminated_reason{${C},pod=~"${re}"} == 1)`),
+    prom(`max by (namespace, pod, container) (kube_pod_container_status_last_terminated_exitcode{${C},pod=~"${re}"})`),
+  ]);
+  return Promise.all(pods.map(async p => {
+    const mine = r => (r ?? []).filter(x => x.metric.pod === p.pod);
+    const why = mine(reasons).map(x => `${x.metric.container}: ${x.metric.reason}`), code = mine(codes).map(x => `exit ${num(x.value?.[1])}`);
+    const [a, b] = await Promise.all([loki(`{${C},pod="${esc(p.pod)}"}`, 5, 60), loki(`{${C},k8s_pod_name="${esc(p.pod)}"}`, 5, 60)]);
+    const lines = [...(a?.length ? a : b ?? [])].reverse().map(l => `${l.time ? clock(l.time) + ' ' : ''}${l.text.slice(0, 160)}`);
+    return `${p.namespace}/${p.pod}: ${why.length || code.length ? `last ended ${[...why, ...code].join(', ')}` : 'no termination reason recorded'}; ` +
+      (lines.length ? `its last log lines:\n    ${lines.join('\n    ')}` : 'no log lines from it in Loki in the last hour');
+  }));
+}
+
 export async function investigate({ uid, cluster, service } = {}) {
   const rule = uid ? await alerts.rule(uid) : null;
   if (uid && !rule) return `Error: no alert rule with uid ${uid}.`;
@@ -86,6 +104,10 @@ export async function investigate({ uid, cluster, service } = {}) {
   const restartRows = (restarts ?? []).map(x => `${x.metric.namespace}/${x.metric.pod} ${Math.round(num(x.value?.[1]))}`);
   const crashRows = (crash ?? []).map(x => `${x.metric.namespace}/${x.metric.pod}`);
   const nodeRows = (notReady ?? []).map(x => x.metric.node);
+  // Why the restarting pods died: each container's last termination (reason, exit code) and its last log lines
+  // before it ended, the same as "kubectl logs --previous" when the logs reach Loki.
+  const dying = [...new Map([...(crash ?? []), ...(restarts ?? [])].map(x => [`${x.metric.namespace}/${x.metric.pod}`, x.metric])).values()].slice(0, 3);
+  const deaths = dying.length ? await within(15_000, lastWords(C, dying)) : null;
 
   // ---- the digest the model reads ----
   const out = [];
@@ -99,6 +121,7 @@ export async function investigate({ uid, cluster, service } = {}) {
   out.push(recent.length ? `Changes in the last 2 hours:\n- ${recent.map(c => `${clock(c.time)} ${c.label}`).join('\n- ')}` : 'No rollouts or config changes recorded in the last 2 hours.');
   if (restartRows.length) out.push(`Restarts in the last hour: ${restartRows.join(', ')}.`);
   if (crashRows.length) out.push(`Crash-looping now: ${crashRows.join(', ')}.`);
+  if (deaths?.length) out.push(`Why they last ended:\n- ${deaths.join('\n- ')}`);
   if (nodeRows.length) out.push(`Nodes not ready: ${nodeRows.join(', ')}.`);
   if (S) out.push(neighbours.length
     ? `Calls to and from ${service} (traces): ${neighbours.map(n => `${n.k} ${r1(n.rps)}/s${n.pct >= .1 ? `, ${r1(n.pct)}% failing` : ''}`).join('; ')}.`

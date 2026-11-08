@@ -16,6 +16,7 @@ import * as aiden from '../aiden/index.js';
 import * as fixes from '../fixes/index.js';
 import * as config from '../config/index.js';
 import { current } from '../llm/index.js';
+import * as identity from '../identity/index.js';
 
 const STARTED = Date.now();
 let ship = () => ({}), glance = async () => null;
@@ -32,8 +33,11 @@ function facts(room) {
   const servers = mcp.status();
   const access = mcp.access();
   const lines = [
-    `Identity: ${s.persona ?? 'SAL'} 9000, the 9000 console (version ${process.env.npm_package_version ?? 'unknown'}), up for ${ago(Date.now() - STARTED)}. A Node.js server; phones are its eye (lens, microphone, speaker and front camera), computer screens are its monitors.`,
+    // persona: the name this ship's persona goes by (personas/), e.g. "HAL 9000" or the dashboard assistant's name.
+    `Identity: ${s.persona ?? 'SAL 9000'}, the persona this ship has chosen, served by the 9000 console (version ${identity.VERSION || 'unknown'}), up for ${ago(Date.now() - STARTED)}. A Node.js server; a phone can be its eye (lens, microphone, speaker and front camera), and computer screens show it as monitors or as a dashboard with a written conversation.`,
     `Mind (the language model): ${mind ? `${mind.name} via the ${kind} provider` : 'none connected: scripted replies only'}. Chosen in Settings → Mind; your own knowledge of that model (who made it, when it was trained) is yours to state, as that model.`,
+    // When it changed, and whether this mind is still being judged (identity/).
+    ...(identity.describeMind() ? [identity.describeMind()] : []),
     `Voice: ${s.voice ?? 'unknown'}${/comfyui/.test(s.voice ?? '') ? ' (speech synthesised by a ComfyUI workflow on a GPU server, streamed to the eye)' : /browser/.test(s.voice ?? '') ? ' (the eye\'s own browser speech)' : ''}. Hearing: the eye's speech recognition, in the browser.`,
     `This ship (room ${room ?? '?'}): ${s.eyes ?? 0} eye(s) and ${s.monitors ?? 0} monitor(s) connected; the eye's camera is ${s.camera ? 'on (a monitor shows the EYE panel)' : 'off until someone looks or asks me to'}${s.cameraState ? ` (camera ${s.cameraState})` : ''}.`,
     `Running on: ${process.env.HOSTED_ON ?? `${os.type()} ${os.release()}`}${process.env.POD_NAME ? `, pod ${process.env.POD_NAME}` : `, host ${os.hostname()}`}${namespace() ? ` in namespace ${namespace()}` : ''}${process.env.NODE_NAME ? ` on node ${process.env.NODE_NAME}` : ''}; Node.js ${process.version} on ${os.arch()}, ${Math.round(process.memoryUsage().rss / 1048576)} MB in use. Reached at ${process.env.PUBLIC_URL ?? 'its local address'}.`,

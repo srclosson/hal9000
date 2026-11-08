@@ -1,0 +1,40 @@
+# The booth's 9000 for the KubeCon pod bay doors game (game/index.js), at https://9000-game.stackgen.run, in its own
+# namespace hal9000-game on fe-apps-discovery-one. A separate deployment of the same image as the real 9000, kept
+# apart from everything the real one shares:
+#   - GAME_MODE=on, and its only ship is the game ship (namespace discovery-game), reached in-cluster
+#   - no StackGen Incidents (no INCIDENTS_URL): no shared settings, MCP servers, incidents, snoozes or memory
+#   - no Grafana or other estate tools: its MCP servers are only the ones below
+#   - no telemetry export
+#   - sign-in through Authentik, so only a signed-in person (the booth's operator) approves plans
+#   kubectl apply -k deploy/overlays/game     (KUBECONFIG=~/.kube/config.discovery-one)
+# Secret it needs, created out of band in hal9000-game: hal9000-keys with COMFYUI_TOKEN, OIDC_CLIENT_SECRET and its
+# own SESSION_SECRET (and LLM_API_KEY if the model needs one). Nothing else from the real 9000's keys.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
+namespace: hal9000-game
+images:
+  - name: docker.io/srclosson/hal9000
+    newTag: 0.36.2
+patches:
+  - path: ingress.yaml
+configMapGenerator:
+  - name: hal9000-config
+    behavior: replace
+    literals:
+      - GAME_MODE=on
+      - GAME_SHIP_URL=http://hardware.discovery-game
+      - DEFAULT_VOICE=hal
+      - LLM_PROVIDER=openai
+      - LLM_BASE_URL=https://ollama.stackgen.run/v1
+      - LLM_MODEL=glm-5.3:cloud
+      - TTS_PROVIDER=comfyui
+      - COMFYUI_URL=https://comfyui.stackgen.run
+      - OIDC_ISSUER=https://auth.stackgen.run/application/o/hal9000/
+      - OIDC_CLIENT_ID=y7NS2FBuZdGhZ38pfxYoevxYxo3KEndUGHk4aEh0
+      - PUBLIC_URL=https://9000-game.stackgen.run
+      - "HOSTED_ON=at the StackGen booth, on Civo Kubernetes (k3s) cluster fe-apps-discovery-one, beside a copy of the ship made for the game"
+      - CLUSTER_NAME=fe-apps-discovery-one
+      # The game ship's gateway, in-cluster (no token there). Reads are offered; commands only through an approved plan.
+      - 'MCP_SERVERS=[{"name":"hal-9000-command-api","url":"http://gateway.discovery-game/mcp","approval":["create_command"],"hint":"The ship Discovery One: its systems, devices with live readings and self-tests, the command log (who changed what, when), and commands to devices (create_command, only through an approved plan)."}]'

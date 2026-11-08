@@ -9,12 +9,21 @@ import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 import QRCode from 'qrcode';
-import { respond, mindName } from './brain.js';
+import { respond, mindName, forget, digIn, lastUsage } from './brain.js';
+import * as scorecard from './scorecard/index.js';
+import * as knowhow from './knowhow/index.js';
+import { addMetrics } from './telemetry/index.js';
+import { shutdown as shutdownTelemetry } from './telemetry/index.js';
+import { observeHttp } from './telemetry/http.js';
+import { observeSocket } from './telemetry/runtime.js';
+import { context as traceContext, remoteContext } from './telemetry/spans.js';
+import { publicConfig } from './telemetry/settings.js';
 import { models as llmModels, signature as llmSignature } from './llm/index.js';
 import { parseCommand, SYSTEM_CODES } from './commands.js';
 import * as tts from './tts/index.js';
 import * as mcp from './mcp/index.js';
 import * as boards from './boards/index.js';
+import * as canvas from './boards/canvas.js';
 import * as drill from './drill.js';
 import * as auth from './auth.js';
 import * as snooze from './snooze/index.js';
@@ -23,13 +32,28 @@ import * as mcpStatus from './mcp/index.js';
 import * as snoozing from './snooze/actions.js';
 import * as watch from './alerts/watch.js';
 import * as home from './home/index.js';
+// The scorecard (scorecard/index.js): exported with the 9000's own metrics, read back from the metrics store.
+addMetrics(scorecard.metrics);
+scorecard.setCardKeys(home.cardKey);
+scorecard.setProm(expr => boards.prom(expr));
 import * as aiden from './aiden/index.js';
 import * as alertRules from './alerts/index.js';
 import * as incidentsApi from './incidents/index.js';
+import * as aidenReview from './aiden/review.js';
 import * as fixes from './fixes/index.js';
 import * as timeline from './timeline/index.js';
 import * as memory from './memory/index.js';
 import * as self from './self/index.js';
+import * as capabilities from './capabilities/index.js';
+import * as held from './held/index.js';
+import * as tasks from './tasks/index.js';
+import * as game from './game/index.js';
+import { PREVIEW } from './preview.js';
+import * as resume from './resume/index.js';
+import { VERSION } from './identity/index.js';
+import * as personas from './personas/index.js';
+import { PROTOCOL } from './public/protocol.js';
+import crypto from 'node:crypto';
 
 const PORT = Number(process.env.PORT) || 9000;
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), 'public');
@@ -72,7 +96,7 @@ async function settingsApi(req, res, url) {
   try {
     if (url.pathname === '/api/settings' && req.method === 'GET') {
       return send(200, { schema: config.pageSchema(), values: config.forPage(), secretsSet: config.secretsSet(), stored: config.stored(), canSave: config.available(),
-        models: await models(), mcp: mcpStatus.status(), duplicates: Object.fromEntries((await config.mcp('', {}).catch(() => [])).map(r => [r.name, mcpStatus.duplicateOf(r.name)]).filter(([, d]) => d)), mind: mindName(), version: process.env.npm_package_version });
+        models: await models(), mcp: mcpStatus.status(), duplicates: Object.fromEntries((await config.mcp('', {}).catch(() => [])).map(r => [r.name, mcpStatus.duplicateOf(r.name)]).filter(([, d]) => d)), mind: mindName(), version: VERSION });
     }
     if (url.pathname === '/api/settings' && req.method === 'PUT') {
       if (!person) return send(403, { error: 'only a signed-in person can change settings' });
@@ -88,16 +112,45 @@ async function settingsApi(req, res, url) {
   } catch (err) { send(400, { error: err.message }); }
 }
 
-const server = http.createServer(async (req, res) => {
+// ---- capability requests: the deployer's API ----
+const deployer = req => {
+  const want = config.get('capabilities.deployerToken'), got = (req.headers.authorization ?? '').replace(/^Bearer /, '');
+  return !!want && got.length === want.length && crypto.timingSafeEqual(Buffer.from(got), Buffer.from(want));
+};
+async function capabilitiesApi(req, res, url, who) {
+  const send = (status, body) => { res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(body)); };
+  if (PREVIEW) return send(503, { error: 'this is a preview of the 9000; capability requests live on the real one' });
+  if (req.method === 'GET' && url.pathname === '/api/capabilities') return send(200, { requests: capabilities.list().map(capabilities.view) });
+  const m = url.pathname.match(/^\/api\/capabilities\/(CR-\d+)\/(preview|shipped|torn-down|merged)$/);
+  if (!m || req.method !== 'POST') return send(404, { error: 'not found' });
+  if (who !== 'deployer') return send(403, { error: 'only the deployer reports previews and rollouts' });
+  let raw = ''; for await (const c of req) raw += c;
+  let body = {}; try { body = raw ? JSON.parse(raw) : {}; } catch { return send(400, { error: 'invalid JSON' }); }
+  const fn = { preview: capabilities.recordPreview, shipped: capabilities.recordShipped, 'torn-down': capabilities.recordTornDown, merged: capabilities.recordMerged }[m[2]];
+  const out = fn(m[1], body);
+  return send(out.status, out.body ?? { error: out.error });
+}
+
+const server = http.createServer(observeHttp(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
 
   // Sign-in (auth.js): pages redirect to the identity provider, everything else needs the session cookie.
   if (await auth.handle(req, res, url)) return;
+  // The preview deployer (CI, with its own token from settings): reads what is wanted, records previews, reports what
+  // shipped and what was torn down. It cannot approve anything; a preview of the 9000 answers none of it.
+  if (url.pathname.startsWith('/api/capabilities') && deployer(req)) return capabilitiesApi(req, res, url, 'deployer');
+
   if (!auth.isPublic(url.pathname) && !auth.user(req)) {
     if (url.pathname === '/' || /^\/(eye|monitor|settings)(\.html)?$|^\/index\.html$/.test(url.pathname)) {
       res.writeHead(302, { Location: `/auth/login?next=${encodeURIComponent(url.pathname + url.search)}`, 'Cache-Control': 'no-store' });
     } else res.writeHead(401, { 'Cache-Control': 'no-store' });
     return res.end();
+  }
+
+  // Explicit public-only allowlist. Never return OTLP/Pyroscope headers or backend credentials to a browser.
+  if (url.pathname === '/api/observability' && req.method === 'GET') {
+    res.writeHead(200, { 'Content-Type': MIME['.json'], 'Cache-Control': 'no-store' });
+    return res.end(JSON.stringify(publicConfig()));
   }
 
   // Synthesized speech for the eye. Waits until the clip is ready (it is usually still being made).
@@ -109,12 +162,27 @@ const server = http.createServer(async (req, res) => {
     return res.end(clip.audio);
   }
 
+  // Capability requests for signed-in people: the list (GET /api/capabilities), and /try/<id>, which records who opened
+  // the preview (and which digest) before sending them to it: shipping needs the decider to have tried it.
+  if (url.pathname.startsWith('/api/capabilities')) return capabilitiesApi(req, res, url, 'person');
+  const tryMatch = url.pathname.match(/^\/try\/(CR-\d+)$/);
+  if (tryMatch) {
+    const u = auth.user(req), person = auth.enabled ? (u && !u.automation ? u.name || u.email : null) : (process.env.ALLOW_UNSIGNED_APPROVAL === '1' ? 'local tester' : null);
+    const to = PREVIEW ? null : capabilities.tried(tryMatch[1], person);
+    res.writeHead(to ? 302 : 404, { ...(to && { Location: to }), 'Cache-Control': 'no-store', 'Content-Type': 'text/plain' });
+    return res.end(to ? '' : 'There is no preview to try for that request now.');
+  }
+
   // Settings (/settings): general settings from config/index.js, and MCP servers kept in StackGen Incidents.
   if (url.pathname.startsWith('/api/settings') || url.pathname.startsWith('/api/mcp-servers')) return settingsApi(req, res, url);
 
-  // The metric browser on the monitors: metric names (for a cluster, or all) with type and help.
-  if (url.pathname === '/api/metrics' && req.method === 'GET') {
-    const out = await boards.browse({ cluster: (url.searchParams.get('cluster') ?? '').slice(0, 120) }).catch(() => null);
+  // The metric browser on the monitors: metric names (for a cluster, or all) with type and help; a metric's labels and
+  // a label's values, for dragging onto a canvas.
+  if (url.pathname.startsWith('/api/metrics') && req.method === 'GET') {
+    const q = k => (url.searchParams.get(k) ?? '').slice(0, 200), sub = url.pathname.slice('/api/metrics'.length);
+    const out = await (sub === '/labels' ? boards.labelsOf({ metric: q('metric'), cluster: q('cluster') }).then(labels => labels && { labels })
+      : sub === '/values' ? boards.valuesOf({ label: q('label'), metric: q('metric'), cluster: q('cluster') }).then(values => values && { values })
+      : sub ? Promise.resolve(null) : boards.browse({ cluster: q('cluster') })).catch(() => null);
     res.writeHead(out ? 200 : 503, { 'Content-Type': MIME['.json'], 'Cache-Control': 'no-store' });
     return res.end(JSON.stringify(out ?? { error: 'Prometheus is not reachable through the metrics MCP server' }));
   }
@@ -122,6 +190,12 @@ const server = http.createServer(async (req, res) => {
   if (url.pathname === '/healthz') {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
     return res.end('ok');
+  }
+
+  // Browsers ask for /favicon.ico on their own: send them the eye, not a 404 (and the default globe).
+  if (url.pathname === '/favicon.ico') {
+    res.writeHead(301, { Location: '/icons/icon.svg', 'Cache-Control': 'max-age=86400' });
+    return res.end();
   }
 
   // QR code for pairing, rendered server-side so the monitor needs no extra library.
@@ -143,7 +217,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   let file = url.pathname === '/' ? '/index.html' : url.pathname;
-  if (file === '/eye' || file === '/monitor' || file === '/settings') file += '.html';
+  if (file === '/eye' || file === '/monitor' || file === '/dashboard' || file === '/settings') file += '.html';
   const full = path.join(ROOT, path.normalize(file));
   if (!full.startsWith(ROOT)) { res.writeHead(403); return res.end(); }
 
@@ -157,14 +231,14 @@ const server = http.createServer(async (req, res) => {
   } catch {
     res.writeHead(404); res.end('Not found');
   }
-});
+}));
 
 // ---- rooms ---------------------------------------------------------------
 
 const rooms = new Map(); // code -> { state, clients: Set<ws> }
 
 const defaultState = () => ({
-  theme: config.get('persona.defaultVoice'),   // 'hal' (red) | 'sal' (blue); from settings
+  ...personas.settle({ persona: config.get('persona.defaultVoice') }),   // persona, voice and theme (personas/); from settings
   mode: 'idle',      // 'idle' | 'listening' | 'speaking' | 'alert' | 'offline'
   pulse: 0,          // 0..1 instantaneous voice level, driven by the eye while speaking
   line: '',          // last thing the computer said
@@ -172,10 +246,12 @@ const defaultState = () => ({
   proactive: true,   // speak up unprompted when alerts fire ("mute alerts" turns this off)
   focus: null,       // story-tour panel the monitors are zoomed to
   systems: false,    // true while the ship shows COM...MEM instead of the situation board ("show the ship systems")
+  preview: PREVIEW,  // a preview of the 9000 (preview.js): the monitors say so
+  trials: [],        // capability requests ready to try (gate 2), the same on every ship
 });
 
 function room(code) {
-  if (!rooms.has(code)) rooms.set(code, { state: defaultState(), clients: new Set() });
+  if (!rooms.has(code)) rooms.set(code, { state: { ...defaultState(), trials: capabilities.awaiting() }, clients: new Set() });
   return rooms.get(code);
 }
 
@@ -200,14 +276,17 @@ function broadcast(r, msg, except) {
 // (none when there is no speech provider, and the eye uses browser speech instead).
 // interim: a holding line ("One moment.") spoken while the real answer is still being worked on.
 // extra: what the chat drawer shows with the reply (the steps taken, the board put up).
+// A written answer (extra.format 'markdown') is shown in full in the chat drawer; the voice says only its first plain
+// sentence, and that the rest is on the screen when there's more.
 function say(r, text, interim = false, extra = {}) {
-  broadcast(r, { type: 'say', text, interim, parts: tts.prepare(text, r.state.theme === 'hal' ? 'hal' : 'sal') });
+  const spoken = extra.format === 'markdown' ? tts.spokenLine(text, extra.cards?.length ?? 0) : text;
+  broadcast(r, { type: 'say', text: spoken, interim, parts: tts.prepare(spoken, r.state.voice) });
   if (!interim) chat(r, { from: 'computer', text, ...extra });
 }
 
 // ---- the ship's conversation, for the monitors' chat drawer ----
 // Every question and reply, newest last, shared by all the ship's monitors (a monitor joining later gets the history).
-// Kept in memory for the last CHAT_MAX messages; it goes when the server restarts.
+// Kept in memory for the last CHAT_MAX messages, and the last 50 across a restart (resume/).
 const CHAT_MAX = 100;
 function chat(r, entry) {
   r.chat ??= [];
@@ -249,9 +328,9 @@ function markFor(code, panel, text) {
 }
 
 function sayTour(r, tour, closing, extra = {}, code) {
-  const theme = r.state.theme === 'hal' ? 'hal' : 'sal';
+  const voice = r.state.voice;
   const segments = [...tour.map(t => ({ text: t.text, focus: t.code, mark: code ? markFor(code, t.code, t.text) : null })), ...(closing ? [{ text: closing, focus: null, mark: null }] : [])];
-  const parts = segments.flatMap(seg => (tts.prepare(seg.text, theme) ?? [{ text: seg.text }]).map(p => ({ ...p, focus: seg.focus, mark: seg.mark })));
+  const parts = segments.flatMap(seg => (tts.prepare(seg.text, voice) ?? [{ text: seg.text }]).map(p => ({ ...p, focus: seg.focus, mark: seg.mark })));
   const text = segments.map(s => s.text).join(' ');
   broadcast(r, { type: 'say', text, parts, tour: true });
   chat(r, { from: 'computer', text, ...extra });
@@ -314,7 +393,9 @@ function focusLine(r, code, about) {
   return f.explicit ? `; this question is about panel ${info.line}` : `; the person is looking at panel ${info.line}`;
 }
 
-function converse(r, code, text, tz, about, person) {
+// written: typed in a monitor's chat (not said to the eye), so the answer is written for reading (brain.js) and only its
+// first plain sentence is spoken.
+function converse(r, code, text, tz, about, person, written = false) {
   // A panel named in the question ("the VIT panel") is what it is about, with its queries, so it can be reworked.
   if (!about && !text.startsWith('[Automatic')) {
     const codes = boards.current(code)?.panels.map(p => p.code) ?? [];
@@ -326,6 +407,8 @@ function converse(r, code, text, tz, about, person) {
   const hooks = {
     focus: about ?? (r.focus && Date.now() - r.focus.at < FOCUS_MS ? r.focus.code : undefined),   // the panel being looked at
     person,   // the signed-in person asking, if known
+    written,   // answer in writing (light markdown) rather than for the voice
+    cards: [],   // steps cards the answer puts on the screen (show_steps, steps/), shown with its reply
     alarm: () => r.state.alarm,   // the alert this ship is alarming about, for plans
     board: { room: code, send: msg => broadcast(r, msg) },   // live data boards for this ship
     screen: () => {
@@ -344,14 +427,16 @@ function converse(r, code, text, tz, about, person) {
       else if (steps.length < 12 && steps.at(-1) !== label) steps.push(label);
     },
   };
-  return respond(code, text, r.state.theme, hooks, tz).then(reply => {
+  return respond(code, text, r.state.persona, hooks, tz).then(reply => {
     const tour = boards.takeTour(code), id = boards.activeId(code), b = boards.current(code);
     // A board this answer put up (or changed) becomes a chip in the chat that brings it back.
-    const extra = { steps, ...(id && b && (id !== boardBefore || steps.length) && { board: { id, title: b.title, story: !!b.story } }) };
+    // A person's question is a case on the scorecard; its chat entry carries the case, for thumbs up or down.
+    const scored = !text.startsWith('[Automatic') && !game.enabled() ? scorecard.record('answer', { room: code, about: text, ...(lastUsage(code) ?? {}) }) : null;
+    const extra = { steps, ...(scored && { case: scored.id }), ...(hooks.cards.length && { cards: hooks.cards }), ...(written && { format: 'markdown' }), ...(id && b && (id !== boardBefore || steps.length) && { board: { id, title: b.title, story: !!b.story } }) };
     if (tour?.length) reply = sayTour(r, tour, reply, extra, code);
     else say(r, reply, false, extra);
     // The eye drives speaking/idle; with no eye present, settle back to idle here.
-    if (![...r.clients].some(c => c.role === 'eye')) setState(r, { mode: 'idle', line: reply });
+    if (![...r.clients].some(c => c.role === 'eye')) setState(r, { mode: 'idle', line: written ? tts.spokenLine(reply, hooks.cards.length) : reply });
   });
 }
 
@@ -462,15 +547,22 @@ const planView = p => p && ({ id: p.id, title: p.title, problem: p.problem, stat
   steps: p.steps.map(s => ({ tool: s.tool, server: s.server, args: s.args, why: s.why, status: s.status, result: s.result })),
   expected: p.expected, risk: p.risk, verify: p.verify, undo: p.undo, createdAt: p.createdAt, expiresAt: p.expiresAt, decidedBy: p.decidedBy, note: p.note });
 const SPOKEN = {
-  approved: p => `Approved by ${p.decidedBy}. Running plan ${p.id}.`,
+  approved: p => (game.enabled() ? 'Running it.' : `Approved by ${p.decidedBy}. Running plan ${p.id}.`),
   rejected: p => `Understood. Plan ${p.id} is withdrawn; nothing was changed.`,
   expired: p => `Plan ${p.id} expired without a decision; nothing was changed.`,
   failed: p => `Plan ${p.id} failed. ${p.note ?? ''}${p.undo?.length ? ' The undo is ready to propose from the plan card.' : ''}`,
-  done: p => `Plan ${p.id} has run. ${p.expected ? `I have no automatic check, so watch for: ${p.expected}` : ''}`,
+  done: p => {
+    // A step can "run" and still be turned down by the system it addressed (a device refusing a command): say so first.
+    const no = p.steps.map((s, i) => ({ i, m: String(s.result ?? '').match(/"status"\s*:\s*"(refused|failed)"[\s\S]*?"result"\s*:\s*"([^"]*)"/) })).find(x => x.m);
+    if (no) return game.enabled() ? no.m[2] : `Plan ${p.id} ran, but step ${no.i + 1} was ${no.m[1]}: ${no.m[2]}`;
+    if (game.enabled()) return 'Done.';   // the booth: the players see what happened on the monitors
+    return `Plan ${p.id} has run. ${p.expected ? `I have no automatic check, so watch for: ${p.expected}` : ''}`;
+  },
   verified: p => `Plan ${p.id} worked: the check held, at ${+Number(p.verify.now).toPrecision(3)} against ${p.verify.expect} ${p.verify.value}.`,
   unverified: p => `Plan ${p.id} ran, but the expected change has not shown after ${p.verify.minutes} minutes (now ${Number.isFinite(p.verify.now) ? +Number(p.verify.now).toPrecision(3) : 'no data'}).${p.undo?.length ? ' The undo is ready to propose from the plan card.' : ''}`,
 };
 fixes.onChange(p => {
+  if (!game.enabled()) { scorecard.plan(p); knowhow.planChanged(p); }   // a plan that followed a runbook becomes a Know-how case
   const r = rooms.get(p.room);
   if (!r) return;
   setState(r, { plan: planView(p) });
@@ -529,7 +621,7 @@ self.configure({
     const r = rooms.get(code);
     if (!r) return {};
     const roles = [...r.clients].map(c => c.role);
-    return { persona: r.state.theme === 'hal' ? 'HAL' : 'SAL', voice: tts.voiceName, eyes: roles.filter(x => x === 'eye').length,
+    return { persona: personas.get(r.state.persona).product, voice: `${tts.voiceName} (${r.state.voice})`, eyes: roles.filter(x => x === 'eye').length,
       monitors: roles.filter(x => x === 'monitor').length, camera: !!r.camera, cameraState: r.state.camera };
   },
 });
@@ -547,6 +639,38 @@ function attachAiden(code, uid) {
 const showsAiden = (code, uid) => boards.current(code)?.panels.some(p => p.code === 'AID' && p.aiden && boards.panelInfo(code, 'AID')?.spec?.alertUid === uid);
 // The first sentence or two, for speaking; the whole summary goes in the chat.
 const spokenSummary = s => { const parts = String(s).match(/[^.!?]+[.!?]+/g) ?? [String(s)]; let out = ''; for (const p of parts) { if ((out + p).length > 300 && out) break; out += p; } return out.trim(); };
+// Capability requests (capabilities/index.js): the ship that approved one is told as it moves; when one is ready to try,
+// every ship shows the gate-2 card and says so. What shipped is remembered.
+const prWords = q => (q.pr ? `pull request ${q.pr.number}` : 'the pull request');
+const CAPABILITY_WORDS = {
+  pr_open: q => `Aiden has opened ${prWords(q)} for ${q.title}, in ${q.repository}. When its preview is built, it will be ready for you to try.`,
+  pr_updated: q => `Aiden has updated ${prWords(q)} for ${q.title} with your feedback. A new preview is on its way.`,
+  ready_to_try: q => `${q.title} is ready to try.${q.preview.evals ? ` Evals: ${q.preview.evals.prod} in production, ${q.preview.evals.preview} in the preview${q.preview.evals.regressed.length ? `; regressed: ${q.preview.evals.regressed.join(', ')}` : ''}.` : ''} Try it from the card, then ship it, send feedback, or reject it.`,
+  approved: (q, x) => `${x.person} approved shipping ${q.title}, exactly as tried. The deployer will roll it out.`,
+  shipped: q => `${q.title} has shipped, the version that was tried.`,
+  digest_mismatch: (q, x) => `The deployer tried to ship ${q.title} as a different build than the one approved. I refused it.`,
+  changes_requested: (q, x) => `Feedback from ${x.person} on ${q.title} has gone to Aiden.`,
+  rejected: (q, x) => `${q.title} was rejected${x.person ? ` by ${x.person}` : ''}. Aiden will close the pull request, and the preview comes down.`,
+  closed: q => `The pull request for ${q.title} was closed without being merged.`,
+  expired: q => `The preview of ${q.title} was not tried in time, so it is coming down. The pull request stays open.`,
+  merged: q => `${prWords(q)[0].toUpperCase() + prWords(q).slice(1)} for ${q.title} has been merged.`,
+  waiting: q => `Aiden is waiting before it continues with ${q.title}: ${q.note}`,
+  failed: q => `The request for ${q.title} has stopped. ${q.note ?? ''}`,
+};
+const EVERY_SHIP = new Set(['ready_to_try', 'approved', 'shipped', 'digest_mismatch']);
+capabilities.onUpdate((q, event, extra) => {
+  const trials = capabilities.awaiting();
+  for (const r of rooms.values()) if (JSON.stringify(r.state.trials) !== JSON.stringify(trials)) setState(r, { trials });
+  const words = CAPABILITY_WORDS[event];
+  if (!words) return;
+  const text = words(q, extra ?? {}).trim(), link = { via: 'Aiden', ...(q.pr && { link: q.pr.url }) };
+  for (const [code, r] of rooms) if (r.clients.size && (code === q.room || EVERY_SHIP.has(event))) sayWhenQuiet(r, text, 0, link);
+  if (['shipped', 'merged'].includes(event)) {
+    memory.store(`Capability request ${q.id} (${q.kind}) "${q.title}" for ${q.repository}: ${q.need} ${event === 'shipped' ? `Shipped ${new Date().toISOString().slice(0, 10)} (${q.shipped.digest.slice(0, 19)}), approved by ${q.approval?.by}` : `Pull request ${q.pr.url} merged`}.`,
+      { kind: 'fact', by: 'HAL 9000' }).catch(() => {});
+  }
+});
+
 aiden.onUpdate(run => {
   if (!['completed', 'draft', 'unmatched', 'failed', 'error'].includes(run.status) || run.told) return;
   if (!aiden.finished(run) && run.status === 'draft') return;
@@ -557,12 +681,118 @@ aiden.onUpdate(run => {
     : `Aiden's investigation of the ${name} alert did not complete.`;
   const extra = { via: 'Aiden', ...(run.url && { link: run.url }), ...(aiden.finished(run) && { full: run.summary }) };
   for (const [code, r] of rooms) if (r.clients.size && (r.announced?.has(run.uid) || showsAiden(code, run.uid))) sayWhenQuiet(r, text, 0, extra);
+  // Then a critical review of it, against the live data; shortfalls are filed for engineering and said in one line.
+  if (!run.reviewed && !game.enabled()) {
+    run.reviewed = true;
+    aidenReview.review(run, { digIn }).then(v => {
+      console.log(`Aiden review of "${run.title}": ${v ? `${v.verdict}${v.ref ? `, ${v.action} ${v.ref}` : ''}` : 'no conclusion'}`);
+      if (v) scorecard.aiden(run, v.verdict);
+      if (!v?.ref) return;
+      const line = `${v.say} I have ${v.action === 'noted' ? `added it to ${v.ref}` : `opened ${v.ref}`} as Aiden feedback for engineering.`;
+      for (const [code, r] of rooms) if (r.clients.size && (r.announced?.has(run.uid) || showsAiden(code, run.uid))) sayWhenQuiet(r, line, 0, { via: 'Aiden review' });
+    }).catch(err => console.error('Aiden review:', err.message));
+  }
   if (aiden.finished(run)) {
     recordAiden(run, mins).catch(err => console.error('Aiden → Incidents:', err.message));
     memory.store(`Aiden investigated the alert "${run.title}"${run.cluster ? ` on ${run.cluster}` : ''}${run.service ? ` (${run.service})` : ''} on ${new Date(run.startedAt).toISOString().slice(0, 10)}: ${run.summary}`,
       { kind: 'cause', cluster: run.cluster, service: run.service, by: 'Aiden via HAL 9000' }).catch(() => {});
   }
 });
+// Held calls (held/index.js): a slow tool's answer becomes its own turn in the room that asked, once the ship is quiet;
+// a call that goes quiet, is lost or runs out of time is said aloud. The monitors show what the 9000 is waiting on.
+const HELD_WORDS = {
+  quiet: c => `${c.label} has been quiet for ${held.age(c)}, longer than it usually takes. Its server still answers, so it may just be thinking. Ask me to stop waiting if you would rather not.`,
+  lost: c => `I have lost touch with ${c.label}: its server stopped answering after ${held.age(c)}. I have stopped waiting for it.`,
+  gave_up: c => `I have stopped waiting for ${c.label} after ${held.age(c)}, the longest I wait for anything.`,
+};
+held.onUpdate((c, event, text) => {
+  const r = rooms.get(c.room);
+  if (!r) return;
+  const waiting = held.forScreen(c.room);
+  if (JSON.stringify(r.state.waiting ?? []) !== JSON.stringify(waiting)) setState(r, { waiting });
+  if (!r.clients.size) return;
+  if (event === 'done') whenQuiet(r, () => converse(r, c.room, `[Automatic: held call ${c.id} has answered: ${c.label}, after ${held.age(c)}. It was for the question "${c.question}". Its answer:\n${text}\nTell the person what it means for what they asked.]`, r.tz));
+  else if (HELD_WORDS[event]) sayWhenQuiet(r, HELD_WORDS[event](c));
+});
+
+// Tasks, a trial (tasks/index.js): a reminder that is due, or a watch that came true, becomes its own turn in the
+// room that set it, once the ship is quiet; a watch that expired or broke is said aloud. Nobody in the room: kept
+// until someone opens it. A task about an incident is noted on its timeline when set and when it ends. The turn is
+// never asked on anyone's behalf, so it can look and tell but never approve a change.
+tasks.start({
+  alertRules: () => alertRules.allRules(),
+  promValues: async expr => { const r = await boards.prom(expr); return r && r.map(s => parseFloat(s.value?.[1])).filter(Number.isFinite); },
+  incident: ref => incidentsApi.get(ref),
+});
+const TASK_PROMPT = {
+  fired: t => t.kind === 'reminder'
+    ? `[Automatic: ${tasks.TRIAL.toLowerCase()} ${t.id}, a reminder ${t.by ?? 'someone'} set ${tasks.age(t)} ago, is due: "${t.question}". Do it now and tell the person what you found, starting by saying it is the reminder they asked for. Look and report only: change nothing.]`
+    : `[Automatic: ${tasks.TRIAL.toLowerCase()} ${t.id} has fired: ${tasks.describeCheck(t.check)} (now ${t.last}), after ${tasks.age(t)} of watching, set by ${t.by ?? 'someone'}.${t.question ? ` They wanted: "${t.question}".` : ''} Tell the person in a sentence, then add what it means if that helps. Look and report only: change nothing.]`,
+};
+const TASK_WORDS = {
+  expired: t => `I have stopped watching for ${t.label} after ${tasks.age(t)}; it never happened. That was a trial task.`,
+  broken: t => `I could not keep watching for ${t.label}: ${t.error}. I have stopped. That was a trial task.`,
+};
+function deliverTask(r, code, t) {
+  tasks.markDelivered(t);
+  if (TASK_PROMPT[t.state]) whenQuiet(r, () => converse(r, code, TASK_PROMPT[t.state](t), r.tz));
+  else if (TASK_WORDS[t.state]) sayWhenQuiet(r, TASK_WORDS[t.state](t));
+}
+tasks.onUpdate((t, event) => {
+  if (t.incident && incidentsApi.available() && event !== 'tick') {
+    const what = t.kind === 'reminder' ? `reminder: "${t.question}"` : `watch for ${t.check ? tasks.describeCheck(t.check) : t.label}`;
+    const body = { created: `[Trial] Task ${t.id} set: ${what}.`, fired: `[Trial] Task ${t.id} fired: ${what}${t.last ? ` (seen: ${t.last})` : ''}.`,
+      expired: `[Trial] Task ${t.id} expired without firing: ${what}.`, broken: `[Trial] Task ${t.id} stopped (${t.error}): ${what}.`,
+      cancelled: `[Trial] Task ${t.id} cancelled: ${what}.` }[event];
+    if (body) incidentsApi.addEvent(t.incident, 'note', body, `${t.cancelledBy ?? (t.by ? `${t.by} via HAL 9000` : 'HAL 9000')}`).catch(err => console.error('Task → Incidents:', err.message));
+  }
+  const r = rooms.get(t.room);
+  if (!r) return;
+  setState(r, { tasks: tasks.forScreen(t.room) });
+  if (r.clients.size && t.finishedAt && !t.delivered) deliverTask(r, t.room, t);
+});
+
+// The pod bay doors game, on the booth's 9000 only (GAME_MODE=on; game/index.js). The trigger and the result are
+// scripted lines; everything in between is the 9000 investigating with the ship's tools, as on any day.
+if (game.enabled()) { alertRules.setExtra(game.rules); boards.setShipSource(game.query); }
+function playGame(r, code, text, by) {
+  if (game.isReset(text)) return game.reset().then(() => say(r, 'The game is reset. Ask me to open the pod bay doors when you are ready.'));
+  game.start(code, by)
+    .then(ok => {
+      if (!ok) return;
+      say(r, 'I\'m sorry, Dave. I\'m afraid I can\'t do that.');
+      sayWhenQuiet(r, `You have ${config.get('game.minutes')} minutes.`);
+    })
+    .catch(err => say(r, `The game is not available right now: ${err.message}.`));
+}
+game.onUpdate((event, g, extra) => {
+  const r = rooms.get(g.room);
+  if (!r) return;
+  if (event === 'start') {   // a fresh start for each group of players: no memory of the last game
+    forget(g.room);
+    r.chat = [];
+    broadcast(r, { type: 'chat', history: [] });
+    boards.stop(g.room, msg => broadcast(r, msg));
+  }
+  if (event === 'reset') { setState(r, { game: null, alarm: null }); return; }
+  setState(r, { game: game.forScreen() });
+  if (!r.clients.size) return;
+  if (event === 'alerts') {
+    const lead = extra[0];
+    setState(r, { alarm: { uid: lead.uid, title: lead.title, severity: lead.labels.severity, cluster: null, since: Date.now() } });
+    // The players do the investigating: the alert is announced in a line (the alarm bar shows it), nothing more.
+    sayWhenQuiet(r, `Alert: ${lead.title}.`);
+  } else if (event === 'resolved') {
+    if (r.state.alarm?.uid === extra) setState(r, { alarm: null });
+  } else if (event === 'won') {
+    setState(r, { alarm: null });
+    say(r, `The pod bay doors are open. You did it in ${game.clock(g.elapsed)}.`);
+  } else if (event === 'lost') {
+    setState(r, { alarm: null });
+    say(r, 'Time is up. The pod bay doors stay shut.');
+  }
+});
+
 async function recordAiden(run, mins, ref) {
   if (!incidentsApi.available()) return;
   const body = `Aiden (deep investigation, ${mins} min): ${run.summary}${run.url ? `\n${run.url}` : ''}`;
@@ -585,9 +815,12 @@ incidentsApi.onDeclared(async (i, uid) => {
 
 // Good news can wait: don't cut off a story tour or an answer in progress; speak once the ship is quiet.
 function sayWhenQuiet(r, text, waitedMs = 0, extra = {}) {
+  whenQuiet(r, () => say(r, text, false, extra), waitedMs);
+}
+function whenQuiet(r, fn, waitedMs = 0) {
   const busy = ['speaking', 'thinking', 'listening'].includes(r.state.mode);
-  if (!busy || waitedMs > 180_000) return say(r, text, false, extra);
-  setTimeout(() => sayWhenQuiet(r, text, waitedMs + 1000, extra), 1000);
+  if (!busy || waitedMs > 180_000) return fn();
+  setTimeout(() => whenQuiet(r, fn, waitedMs + 1000), 1000);
 }
 
 function announceResolved(rule) {
@@ -618,16 +851,20 @@ wss.on('connection', (ws, req) => {
   ws.panel = Number(url.searchParams.get('panel')) || 0;
   ws.code = code;
   ws.user = user;
+  observeSocket(ws);
 
   const r = room(code);
   r.clients.add(ws);
   if (incidentsState && !r.state.incidents) r.state.incidents = incidentsState;
-  ws.send(JSON.stringify({ type: 'hello', id: ws.id, state: r.state, roster: roster(r) }));
+  r.state.tasks = tasks.forScreen(code);
+  ws.send(JSON.stringify({ type: 'hello', id: ws.id, state: r.state, roster: roster(r), protocol: PROTOCOL, personas: personas.list() }));
   const board = boards.current(code);
   if (board) ws.send(JSON.stringify({ type: 'board', board }));   // a monitor joining mid-board sees it too
   ws.send(JSON.stringify(viewsFor(code, r)));
   ws.send(JSON.stringify({ type: 'chat', history: r.chat ?? [] }));
+  for (const e of canvas.editing(code)) ws.send(JSON.stringify({ type: 'editing', ...e }));   // panels open on someone's canvas
   broadcast(r, { type: 'roster', roster: roster(r) }, ws);
+  for (const t of tasks.undelivered(code)) deliverTask(r, code, t);   // a trial task that ended while nobody was here
 
   if (ws.role === 'eye' && r.camera) ws.send(JSON.stringify({ type: 'camera', on: true }));
 
@@ -640,11 +877,15 @@ wss.on('connection', (ws, req) => {
     }
     let msg;
     try { msg = JSON.parse(raw); } catch { return; }
+    if (!msg || typeof msg !== 'object') return;
+    // No baggage, room/session identifiers or message contents enter the trace context.
+    return traceContext.with(remoteContext(msg), () => {
 
     if (msg.type === 'set' && msg.state && typeof msg.state === 'object') {
-      Object.assign(r.state, msg.state);
+      const state = personas.settle(msg.state);
+      Object.assign(r.state, state);
       // pulse is high-frequency; skip echoing it back to the sender
-      broadcast(r, { type: 'state', state: msg.state, from: ws.id }, msg.state.pulse !== undefined ? ws : undefined);
+      broadcast(r, { type: 'state', state, from: ws.id }, state.pulse !== undefined ? ws : undefined);
     } else if (msg.type === 'say' && typeof msg.text === 'string') {
       // Only the eye speaks: it owns the voice, monitors just display.
       say(r, msg.text.slice(0, 500));
@@ -653,7 +894,10 @@ wss.on('connection', (ws, req) => {
       const text = msg.text.slice(0, 500);
       const asked = typeof msg.about === 'string' ? msg.about.slice(0, 3).toUpperCase() : undefined;
       broadcast(r, { type: 'heard', text, about: asked });
-      chat(r, { from: 'you', text, about: asked, spoken: ws.role === 'eye', by: auth.enabled && !ws.user.automation ? ws.user.name : undefined });
+      chat(r, { from: 'you', text, about: asked, spoken: ws.role === 'eye', by: game.enabled() ? 'Dave Bowman' : auth.enabled && !ws.user.automation ? ws.user.name : undefined });
+      // The booth game (game/index.js): "open the pod bay doors" starts it, "reset the game" resets it.
+      if (game.enabled() && (game.isReset(text) || (game.isTrigger(text) && game.current().phase !== 'playing')))
+        return playGame(r, code, text, auth.enabled && !ws.user.automation ? ws.user.name : undefined);
       // Display commands ("return to the overview") skip the LLM: move the monitors, then acknowledge.
       const cmd = parseCommand(text);
       if (cmd?.ack) return acknowledge(r, auth.enabled && !ws.user.automation ? ws.user.name : undefined);
@@ -693,16 +937,38 @@ wss.on('connection', (ws, req) => {
       // about: the panel a drilldown question was asked from; it also becomes the focus for follow-ups.
       const about = typeof msg.about === 'string' ? msg.about.slice(0, 3).toUpperCase() : undefined;
       if (about) r.focus = { code: about, at: Date.now(), explicit: true };
-      converse(r, code, text, tz, about, auth.enabled && !ws.user.automation ? ws.user.name : undefined);
+      scorecard.heard(code, text);   // "that's wrong": the answer before this one is disputed
+      converse(r, code, text, tz, about, auth.enabled && !ws.user.automation ? ws.user.name : undefined, ws.role !== 'eye');
     } else if (msg.type === 'snooze' && typeof msg.code === 'string') {
       // From a monitor's drilldown menu or the "s" key: snooze (or, on a one-off board, remove) that panel.
       const actor = auth.enabled && !ws.user.automation ? ws.user.name : 'someone at a monitor';
       snoozing.snoozePanel(code, { code: msg.code.slice(0, 3).toUpperCase(), minutes: Math.min(14 * 1440, Math.max(5, Number(msg.minutes) || Math.round(config.get('board.snoozeHours') * 60))) },
         { actor, send: m => broadcast(r, m) }).then(reply => say(r, reply)).catch(err => say(r, `I could not do that: ${err.message}`));
+    } else if (msg.type === 'trial' && typeof msg.id === 'string' && ['ship', 'feedback', 'reject'].includes(msg.decision)) {
+      // Gate 2 from a monitor's card: ship what was tried (the digest the card showed), send feedback, or reject.
+      capabilities.decide(msg.id.slice(0, 12), msg.decision, approverOf(ws), { digest: typeof msg.digest === 'string' ? msg.digest : undefined, text: typeof msg.text === 'string' ? msg.text : undefined })
+        .then(reply => { if (reply) say(r, reply); }).catch(err => say(r, `I could not do that: ${err.message}`));
     } else if (msg.type === 'plan' && typeof msg.id === 'string') {
       // A plan decided on a monitor: approve / reject (with the hash of what was shown), or propose its undo.
       if (msg.decision === 'undo') { const u = fixes.proposeUndo(msg.id); if (u.error) say(r, u.error); }
       else decidePlan(r, ws, msg.id, msg.decision === 'approve' ? 'approve' : 'reject', typeof msg.hash === 'string' ? msg.hash : undefined);
+    } else if (msg.type === 'runbook' && typeof msg.card === 'string') {
+      // "Save as runbook" on a steps card in the chat: a Know-how draft, as the person who asked for it.
+      const e = (r.chat ?? []).find(x => x.id === msg.chat), c = e?.cards?.find(x => x.id === msg.card);
+      if (!c) return;
+      const person = auth.enabled && !ws.user.automation ? ws.user.name : undefined;
+      if (!knowhow.available()) { chat(r, { from: 'computer', text: 'Know-how is not connected here, so I cannot save that as a runbook.' }); return; }
+      knowhow.draft({ title: c.title, when: { text: c.title }, steps: c.steps, source_ref: `chat ${code}` }, person ?? 'someone').then(d => {
+        chat(r, d ? { from: 'computer', text: `Saved as draft runbook ${d.ref} in Know-how, for review.`, link: knowhow.link(d.ref), via: 'Know-how' }
+          : { from: 'computer', text: 'Know-how did not take that runbook just now; please try again.' });
+      });
+    } else if (msg.type === 'rate' && typeof msg.right === 'boolean') {
+      // Thumbs on a chat answer (its case) or on a situation card (its panel code), for the scorecard.
+      const by = `by ${auth.enabled && !ws.user.automation ? ws.user.name : 'someone at a monitor'}`;
+      const target = typeof msg.case === 'string' ? scorecard.get(msg.case.slice(0, 12))
+        : typeof msg.code === 'string' ? scorecard.latest('dig', x => x.key === home.cardKey(msg.code.slice(0, 3).toUpperCase())) : null;
+      if (target) scorecard.judge(target, msg.right ? 'right' : 'wrong', by);
+      ws.send(JSON.stringify({ type: 'rated', case: target?.id ?? null, code: msg.code ?? null, right: msg.right, ok: !!target }));
     } else if (msg.type === 'ack') {
       // The Acknowledge button.
       acknowledge(r, auth.enabled && !ws.user.automation ? ws.user.name : undefined);
@@ -718,20 +984,25 @@ wss.on('connection', (ws, req) => {
       // Suggested drilldown questions for one panel, to this monitor only.
       const c = msg.code.slice(0, 3).toUpperCase();
       r.focus = { code: c, at: Date.now(), explicit: true };
-      // part: a box (service) or arrow (call) clicked on a flow diagram.
+      // part: a box (service) or arrow (call) clicked on a flow diagram, or a node or workload on a node map.
       const p = msg.part, str = v => (typeof v === 'string' ? v.slice(0, 80) : undefined);
-      const part = p?.kind === 'node' && str(p.id) ? { kind: 'node', id: str(p.id) } : p?.kind === 'edge' && str(p.from) && str(p.to) ? { kind: 'edge', from: str(p.from), to: str(p.to) } : null;
+      const part = ['node', 'k8snode', 'workload'].includes(p?.kind) && str(p.id) ? { kind: p.kind, id: str(p.id) } : p?.kind === 'edge' && str(p.from) && str(p.to) ? { kind: 'edge', from: str(p.from), to: str(p.to) } : null;
       drill.suggest(code, c, m => ws.readyState === 1 && ws.send(JSON.stringify(m)), part);
     } else if (msg.type === 'view' && typeof msg.id === 'string') {
       showView(code, r, msg.id.slice(0, 40));
     } else if (msg.type === 'panel') {
       ws.panel = Number(msg.panel) || 0;
       broadcast(r, { type: 'roster', roster: roster(r) });
+    } else if (msg.type === 'canvas' && typeof msg.op === 'string') {
+      // A panel opened on this monitor's canvas (boards/canvas.js): its draft is this monitor's until put up.
+      canvas.handle(ws, code, msg, m => broadcast(r, m)).catch(err => console.error('Canvas:', err.message));
     }
+    });
   });
 
   ws.on('close', () => {
     r.clients.delete(ws);
+    canvas.left(ws, m => broadcast(r, m));
     updateCamera(r);
     broadcast(r, { type: 'roster', roster: roster(r) });
     if (r.clients.size === 0) setTimeout(() => { if (r.clients.size === 0) { boards.stop(code); rooms.delete(code); } }, 10 * 60_000);
@@ -739,6 +1010,38 @@ wss.on('connection', (ws, req) => {
 });
 
 // The situation board goes to every ship that has no other board up and hasn't asked for the ship systems.
+// Picking up where it left off after a restart (resume/): each ship's settings and the board on its screens, and who
+// acknowledged which alert (so a rollout doesn't sound an alarm someone already has).
+const KEEP_STATE = ['persona', 'voice', 'theme', 'proactive', 'systems'];
+resume.register('monitors', {
+  save: () => ({ rooms: Object.fromEntries([...rooms].map(([code, r]) => [code, Object.fromEntries(KEEP_STATE.map(k => [k, r.state[k]]))])), boards: boards.kept() }),
+  restore: async d => {
+    for (const [code, st] of Object.entries(d.rooms ?? {})) Object.assign(room(code).state, personas.settle(Object.fromEntries(KEEP_STATE.filter(k => k in st).map(k => [k, st[k]]))));
+    await boards.bringBack(d.boards, code => msg => broadcast(room(code), msg));
+  },
+});
+// The chat drawer: each ship's last 50 messages (with their cards), so a rollout doesn't empty it.
+resume.register('chat', {
+  save: () => Object.fromEntries([...rooms].filter(([, r]) => r.chat?.length).map(([code, r]) => [code, resume.fit(r.chat.slice(-50), 30_000)])),
+  restore: d => {
+    for (const [code, list] of Object.entries(d ?? {})) {
+      const r = room(code);
+      if (r.chat?.length) continue;
+      r.chat = list; r.chatId = Math.max(0, ...list.map(e => e.id ?? 0));
+    }
+  },
+});
+resume.register('acknowledgements', {
+  save: () => ({ acks: [...acks], history: [...ackHistory].slice(-50), cleared: [...clearedAt].slice(-50) }),
+  restore: d => {
+    for (const [uid, a] of d.acks ?? []) acks.set(uid, a);
+    for (const [uid, a] of d.history ?? []) ackHistory.set(uid, a);
+    for (const [uid, t] of d.cleared ?? []) clearedAt.set(uid, t);
+  },
+});
+// Restored before the situation board starts, so it doesn't dig again into what it had already found.
+const resumed = resume.restore().catch(() => {}).finally(() => resume.start());
+
 boards.configureHome({
   ships: () => [...rooms].filter(([code, r]) => r.clients.size && !r.state.systems && !boards.hasActive(code))
     .map(([code, r]) => ({ room: code, send: msg => broadcast(r, msg) })),
@@ -749,16 +1052,17 @@ boards.configureHome({
 // fixed) after boot: try at start and after every settings sync until each is running.
 let homeStarted = false, watchStarted = false;
 function startWatchers() {
-  if (!homeStarted) homeStarted = home.start({ onChange: spec => { boards.setHome(spec); for (const code of rooms.keys()) sendViews(code); } });
+  if (!homeStarted) homeStarted = home.start({ digIn, onChange: spec => { boards.setHome(spec); for (const code of rooms.keys()) sendViews(code); } });
   // An alert firing or resolving changes what matters most: recompose the situation board straight away.
-  if (!watchStarted) watchStarted = watch.start({
+  if (!watchStarted && !PREVIEW && !game.enabled()) watchStarted = watch.start({   // a preview announces nothing; the booth game announces its own
     onFire: fired => { announceFiring(fired); home.recompose(); },
     onResolve: rule => { announceResolved(rule); home.recompose(); },
   });
 }
 snooze.onChange(() => { if (homeStarted) home.recompose(); });   // a snooze added or lifted: the situation board recomposes now
-mcp.onSync(startWatchers);
+mcp.onSync(() => resumed.then(startWatchers));
 mcp.start()
+  .then(() => resumed)
   .then(startWatchers)
   .catch(err => console.error('MCP:', err.message));
 
@@ -767,3 +1071,21 @@ server.listen(PORT, () => {
   console.log(`  Monitor (this computer): http://localhost:${PORT}/monitor`);
   console.log(`  On your network:         http://${lanAddress()}:${PORT}/`);
 });
+
+// Stop accepting work, drain requests/connections, then flush all signals within the pod's grace period.
+let stopping = false;
+async function stop(signal) {
+  if (stopping) return; stopping = true;
+  console.info('HAL shutting down', { signal });
+  const deadline = setTimeout(() => process.exit(1), 10_000);
+  for (const client of wss.clients) client.close(1001, 'server shutting down');
+  const drained = new Promise(resolve => server.close(resolve));
+  const terminate = setTimeout(() => { for (const client of wss.clients) client.terminate(); server.closeAllConnections(); }, 2000);
+  await drained;
+  clearTimeout(terminate);
+  await shutdownTelemetry();
+  clearTimeout(deadline);
+  process.exit(0);
+}
+process.once('SIGTERM', () => stop('SIGTERM'));
+process.once('SIGINT', () => stop('SIGINT'));

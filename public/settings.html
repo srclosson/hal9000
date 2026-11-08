@@ -1,6 +1,7 @@
 <!doctype html>
 <html lang="en">
 <head>
+<script defer src="/assets/observability.js"></script>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>9000 · Settings</title>
@@ -29,6 +30,7 @@
   .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px 22px; }
   label.set[hidden] { display: none; }
   label.set { display: grid; gap: 6px; font-size: 12px; letter-spacing: .1em; text-transform: uppercase; color: rgba(242,242,242,.8); }
+  label.set textarea { text-transform: none; letter-spacing: .02em; resize: vertical; min-height: 5em; }
   label.set small { text-transform: none; letter-spacing: .02em; color: rgba(242,242,242,.55); font-size: 11.5px; }
   input, select, textarea { font: inherit; font-size: 14px; color: #fff; background: rgba(0,0,0,.28); border: 1px solid rgba(255,255,255,.3); padding: 8px 10px; letter-spacing: .04em; }
   input:focus, select:focus { outline: 1px solid #fff; }
@@ -57,6 +59,9 @@
   .tools input[type=checkbox] { flex: none; width: 7.2em; visibility: hidden; }
   .add { display: grid; grid-template-columns: 1fr 2fr; gap: 8px 10px; margin-top: 16px; padding-top: 16px; border-top: 1px solid rgba(255,255,255,.25); }
   .add .wide { grid-column: 1 / -1; }
+  .add[hidden] { display: none; }
+  .add [data-more] { justify-self: start; }
+  .srv .add { margin-top: 10px; padding-top: 10px; }
   .toast { position: fixed; bottom: 18px; left: 50%; translate: -50% 0; background: #f4f4f4; color: #000; padding: 10px 16px; font-size: 13px; letter-spacing: .06em; z-index: 9; }
   @media (max-width: 700px) { main { padding: 14px; } .add { grid-template-columns: 1fr; } header { padding: 12px 14px; } }
 </style>
@@ -86,12 +91,12 @@ const room = new URLSearchParams(location.search).get('room');
 if (room) $('#back').href = `/monitor?room=${encodeURIComponent(room)}`;
 fetch('/auth/me').then(r => r.ok ? r.json() : {}).then(m => { if (m.name) $('#who').textContent = m.name; }).catch(() => {});
 
-const GROUPS = [['Mind', 'f-mind', 'MND'], ['Persona', 'f-persona', 'PRS'], ['Situation board', 'f-board', 'SIT'], ['Alerts', 'f-alerts', 'ALR'], ['Memory', 'f-memory', 'MEM'], ['Aiden', 'f-aiden', 'AID']];
+const GROUPS = [['Mind', 'f-mind', 'MND'], ['Persona', 'f-persona', 'PRS'], ['Situation board', 'f-board', 'SIT'], ['Alerts', 'f-alerts', 'ALR'], ['Memory', 'f-memory', 'MEM'], ['Aiden', 'f-aiden', 'AID'], ['Capabilities', 'f-aiden', 'CAP']];
 let S;
 
 async function load() {
   S = await api('/api/settings');
-  $('#name').textContent = S.values['persona.defaultVoice'] === 'hal' ? 'HAL' : 'SAL';
+  $('#name').textContent = { hal: 'HAL', sal: 'SAL', assistant: S.values['persona.assistantName'] || 'Assistant' }[S.values['persona.defaultVoice']] ?? 'SAL';
   renderGeneral(); renderTools();
 }
 
@@ -108,10 +113,11 @@ function field(key, spec, value) {
     const set = S.secretsSet?.[key];
     input = `<span class="unit"><input type="password" name="${key}" value="" placeholder="${set ? 'set · leave blank to keep' : 'not set'}" autocomplete="new-password" spellcheck="false">` +
       `${set ? `<button type="button" class="clear-secret" data-key="${key}">Clear</button>` : ''}</span>`;
-  } else if (spec.type === 'text') input = `<input type="text" name="${key}" value="${esc(value)}" spellcheck="false" autocomplete="off">`;
+  } else if (spec.type === 'longtext') input = `<textarea name="${key}" rows="4" spellcheck="false">${esc(value)}</textarea>`;
+  else if (spec.type === 'text') input = `<input type="text" name="${key}" value="${esc(value)}" spellcheck="false" autocomplete="off">`;
   else input = `<span class="unit"><input type="number" name="${key}" value="${value}" min="${spec.min}" max="${spec.max}" step="${spec.step ?? 1}">${spec.unit ? `<span>${spec.unit}</span>` : ''}</span>`;
   return `<label class="set"${spec.when ? ` data-when="${spec.when}"` : ''}>${esc(spec.label)} ${input}
-    ${spec.type === 'secret' ? `<span class="default">${S.secretsSet?.[key] ? 'set' : 'not set'}</span>` : `<span class="default ${changed ? 'changed' : ''}">${changed ? 'changed · ' : ''}default ${esc(spec.default)}${spec.unit ? ' ' + spec.unit : ''}</span>`}${spec.help ? `<small>${esc(spec.help)}</small>` : ''}</label>`;
+    ${spec.type === 'secret' ? `<span class="default">${S.secretsSet?.[key] ? 'set' : 'not set'}</span>` : spec.type === 'longtext' ? `<span class="default ${changed ? 'changed' : ''}">${changed ? 'changed' : 'default'}</span>` : `<span class="default ${changed ? 'changed' : ''}">${changed ? 'changed · ' : ''}default ${esc(spec.default)}${spec.unit ? ' ' + spec.unit : ''}</span>`}${spec.help ? `<small>${esc(spec.help)}</small>` : ''}</label>`;
 }
 
 function renderGeneral() {
@@ -141,6 +147,13 @@ function renderGeneral() {
   };
 }
 
+// Header rows: any number of name/value pairs; a row with no name is ignored. Values are secrets, so they are never
+// filled in again, only the names.
+const headerRow = (name = '') => `<input name="hname" value="${esc(name)}" placeholder="HEADER (OPTIONAL), E.G. AUTHORIZATION"><input name="hvalue" placeholder="HEADER VALUE (STORED, NEVER SHOWN AGAIN)" autocomplete="off">`;
+const headersOf = f => { const values = f.querySelectorAll('[name=hvalue]');
+  return Object.fromEntries([...f.querySelectorAll('[name=hname]')].map((n, i) => [n.value.trim(), values[i].value]).filter(([k]) => k)); };
+const moreHeaders = f => { const b = f.querySelector('[data-more]'); b.onclick = () => b.insertAdjacentHTML('beforebegin', headerRow()); };
+
 // MCP servers: the 9000's built-in ones (from its deployment, read-only here) and the ones configured in settings,
 // shared with StackGen Incidents. Read-only tools are allowed by default; others have to be ticked.
 async function renderTools() {
@@ -158,8 +171,13 @@ async function renderTools() {
     ${builtin.map(s => `<div class="srv"><div class="head"><b>${esc(s.name.toUpperCase())}</b><span class="tag ${s.connected ? 'on' : 'bad'}">${s.connected ? `built in · ${s.tools.length} tools` : 'built in · not connected'}</span>
       <span class="url">${esc(s.url)}</span></div><div class="meta" style="margin-top:6px">${s.tools.map(esc).join(' · ') || 'no tools'} — set in the deployment, not editable here</div></div>`).join('')}
     ${configured.map(s => `<div class="srv" data-id="${s.id}"><div class="head"><b>${esc(s.name.toUpperCase())}</b>${state(s)}<span class="url">${esc(s.url)}</span>
-        <span style="margin-left:auto" class="bar" style="margin:0"><button data-act="test">Test</button><button data-act="toggle">${s.enabled ? 'Turn off' : 'Turn on'}</button><button data-act="remove">Remove</button></span></div>
+        <span style="margin-left:auto" class="bar" style="margin:0"><button data-act="test">Test</button><button data-act="headers">Headers</button><button data-act="toggle">${s.enabled ? 'Turn off' : 'Turn on'}</button><button data-act="remove">Remove</button></span></div>
+      ${Object.keys(s.headers ?? {}).length ? `<div class="meta" style="margin-top:6px">Headers: ${Object.keys(s.headers).map(esc).join(', ')}</div>` : ''}
       ${s.hint ? `<div class="meta" style="margin-top:6px">${esc(s.hint)}</div>` : ''}
+      <form class="add hdrs" hidden>${(Object.keys(s.headers ?? {}).length ? Object.keys(s.headers) : ['']).map(headerRow).join('')}
+        <button type="button" class="wide" data-more>+ Another header</button>
+        <div class="wide bar" style="margin:0"><button class="primary">Save headers and test</button>
+          <span class="meta">Saving replaces all of this server's headers, so enter every value again. Clear a name to drop that header.</span></div></form>
       ${s.last_test?.ok ? `<div class="tools">${s.last_test.tools.map(t => (s.internal ?? []).includes(t.name) ? `<label><input type="checkbox" disabled>
           <span>${esc(t.name)} <span class="tag off">internal · the 9000's own code only</span><small>${esc(t.description)}</small></span></label>` : `<label><select data-tool="${esc(t.name)}" aria-label="${esc(t.name)}">${[['off', 'Off'], ['use', 'Use'], ['ask', 'Ask first']].map(([v, l]) => `<option value="${v}" ${mode(s, t) === v ? 'selected' : ''}>${l}</option>`).join('')}</select>
           <span>${esc(t.name)} <span class="tag ${t.readOnly ? 'on' : 'warn'}">${t.readOnly ? 'read-only' : 'can change things'}</span><small>${esc(t.description)}</small></span></label>`).join('')}</div>
@@ -167,22 +185,37 @@ async function renderTools() {
         : s.last_test ? `<div class="meta" style="margin-top:6px;color:#ffb4a0">${esc(s.last_test.error)}</div>` : ''}</div>`).join('')}
     <form class="add" id="add">
       <input name="name" required placeholder="NAME, E.G. K8S"><input name="url" required placeholder="https://…/mcp">
-      <input name="hname" placeholder="HEADER (OPTIONAL), E.G. AUTHORIZATION"><input name="hvalue" placeholder="HEADER VALUE (STORED, NEVER SHOWN AGAIN)" autocomplete="off">
+      ${headerRow()}
+      <button type="button" class="wide" data-more>+ Another header</button>
       <input class="wide" name="hint" placeholder="HINT FOR THE 9000 (OPTIONAL): WHAT THIS SERVER IS FOR">
       <div class="wide bar" style="margin:0"><button class="primary">Add and test</button></div>
     </form>`;
+  moreHeaders($('#add'));
   $('#add').onsubmit = async e => {
     e.preventDefault();
-    const f = e.target, headers = f.hname.value.trim() ? { [f.hname.value.trim()]: f.hvalue.value } : {};
+    const f = e.target, headers = headersOf(f);
     e.submitter.disabled = true; e.submitter.textContent = 'Connecting…';
     const r = await api('/api/mcp-servers', { method: 'POST', body: { name: f.name.value, url: f.url.value, headers, hint: f.hint.value } }).catch(err => { toast(err.message); return null; });
     if (r) toast(r.last_test?.ok ? `Added ${r.name}: ${r.last_test.tools.length} tools. The 9000 connects within a minute.` : `Added ${r.name}, but it didn't connect: ${r.last_test?.error ?? ''}`);
     load();
   };
   for (const el of document.querySelectorAll('.srv[data-id]')) {
-    const id = el.dataset.id, s = configured.find(x => String(x.id) === id);
+    const id = el.dataset.id, s = configured.find(x => String(x.id) === id), hdrs = el.querySelector('.hdrs');
+    moreHeaders(hdrs);
+    hdrs.onsubmit = async e => {
+      e.preventDefault();
+      e.submitter.disabled = true; e.submitter.textContent = 'Connecting…';
+      try {
+        const headers = headersOf(hdrs);
+        await api(`/api/mcp-servers/${id}`, { method: 'PATCH', body: { headers } });
+        const r = await api(`/api/mcp-servers/${id}/test`, { method: 'POST' });
+        toast(`${s.name}: ${Object.keys(headers).length} header${Object.keys(headers).length === 1 ? '' : 's'} saved. ${r.ok ? `${r.tools.length} tools.` : `It didn't connect: ${r.error}`}`);
+      } catch (err) { toast(err.message); }
+      load();
+    };
     for (const b of el.querySelectorAll('[data-act]')) b.onclick = async () => {
       const act = b.dataset.act;
+      if (act === 'headers') { hdrs.hidden = !hdrs.hidden; return; }
       if (act === 'remove' && !confirm(`Remove ${s.name}? The 9000 stops using it within a minute.`)) return;
       b.disabled = true;
       try {

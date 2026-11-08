@@ -5,15 +5,37 @@
 //                             letters, as the film's panels do (currently every system).
 // ship = { state, voice: number[] } where voice is a rolling history of the eye's pulse.
 
+import { keep as keepLooks, alpha, usePalette } from '/inks.js';
+
 // Discovery display language: white hairlines and monospaced data straight on a muted field colour.
-const WHITE = '#f4f4f4';
-const DIM = 'rgba(244,244,244,.45)';
-const FAINT = 'rgba(244,244,244,.16)';
-const CHIP = '#e6d76a';   // pale indicator yellow: WARNING
+// Every colour comes from the page's tokens (base.css, --panel-* and --field-*), so a UI with another palette draws
+// the same panels in its own colours. The values here are only fallbacks; retint() reads the tokens again.
+// The ship systems' illustrations (the eye, Jupiter) keep their own colours: they are pictures, not data.
+const tok = (name, fallback) => (typeof document === 'undefined' ? '' : css(name).trim()) || fallback;
+let GRID, INK, GROUND, VEIL, SCRIM, WATER, WHITE, DIM, FAINT, CHIP, RED, RED_SOFT, AMBER, GREEN, BLUE, DARK, CHIP_INK, BOARD_COLORS;
+const inkAt = a => `rgba(${INK},${a})`;          // hairlines, text and fills, at a strength
+const ground = a => `rgba(${GROUND},${a})`;    // shadows and scrims under graphics
+const veil = a => `rgba(${VEIL},${a})`;        // a dark backing behind labels drawn over data
+const water = a => `rgba(${WATER},${a})`;      // the pale blue of node pressure and fix strips
+export function retint() {
+  INK = tok('--panel-ink', '244,244,244'); GROUND = tok('--panel-ground', '0,0,0'); VEIL = tok('--panel-veil', '18,16,40');
+  SCRIM = tok('--panel-scrim', '8,8,24'); WATER = tok('--panel-water', '168,220,255');
+  WHITE = inkAt(1); DIM = inkAt(.45); FAINT = inkAt(.16);
+  CHIP = tok('--chip-yellow', '#e6d76a');      // pale indicator yellow: WARNING
+  RED = tok('--panel-alarm', '#ff2a12'); RED_SOFT = tok('--panel-alarm-soft', '#ffb4a8'); AMBER = tok('--panel-amber', '#f0b43c');
+  GREEN = tok('--panel-ok', '#9fe0a0'); BLUE = tok('--panel-aiden', '#8fd3ff');
+  DARK = tok('--panel-dark', '#111');          // text on a bright warning or critical fill
+  CHIP_INK = tok('--panel-chip-ink', '#14143a');
+  // Muted Discovery fields (same family as the ship systems); health is shown by tags, not by the field colour.
+  GRID = Number(tok('--panel-grid', '.16'));   // the faint grid behind a panel; 0: none
+  const hex = INK.split(',').map(n => Number(n).toString(16).padStart(2, '0')).join('');
+  usePalette(tok('--panel-series', 'dark'), `#${hex}`);   // series colours that read on this UI's panels (inks.js)
+  BOARD_COLORS = [['--field-blue', '#3c55a5'], ['--field-teal', '#2e5d5a'], ['--field-plum', '#5a3f62'], ['--field-slate', '#4b6189'], ['--field-royal', '#2e5bad'], ['--field-navy', '#18204a']].map(([n, f]) => tok(n, f));
+}
 
 function grid(ctx, w, h, step) {
-  if (!(step >= 4)) return;   // a zero-size panel gives step 0: the loops below would never end (the tab ran out of memory)
-  ctx.strokeStyle = FAINT; ctx.lineWidth = 1;
+  if (!(step >= 4) || !GRID) return;   // a zero-size panel gives step 0: the loops below would never end (the tab ran out of memory)
+  ctx.strokeStyle = inkAt(GRID); ctx.lineWidth = 1;
   ctx.beginPath();
   for (let x = step; x < w; x += step) { ctx.moveTo(x, 0); ctx.lineTo(x, h); }
   for (let y = step; y < h; y += step) { ctx.moveTo(0, y); ctx.lineTo(w, y); }
@@ -21,6 +43,7 @@ function grid(ctx, w, h, step) {
 }
 
 const css = name => getComputedStyle(document.documentElement).getPropertyValue(name);
+retint();
 const FONT = css('--font-mono') || 'monospace';        // data: line-printer monospace
 const FONT_WIDE = css('--font-wide') || FONT;          // codes and tags: extended capitals
 const FONT_SIGN = css('--font-screen') || FONT;        // signage: thin Futura capitals
@@ -55,6 +78,13 @@ function ticks(ctx, x0, y0, x1, y1, n = 8) {
 
 // Graphics stay white whatever the theme: the film's screens are white line work on colour fields.
 // (refreshAccent is kept for the monitor, which still calls it on theme changes.)
+// Where a line breaks: samples further apart than one and a half of its usual step (a scrape gap, a pod restart) are
+// not joined, so an outage never looks like a smooth ramp. -> (index) => true when point i starts a new run.
+function breaksOf(points, stepMs) {
+  const diffs = points.slice(1).map(([t], i) => t - points[i][0]).filter(x => x > 0);
+  const step = Math.max(stepMs || 0, diffs.length ? Math.min(...diffs) : 0);
+  return i => !i || (step > 0 && points[i][0] - points[i - 1][0] > step * 1.5);
+}
 export function refreshAccent() {}
 const accent = () => WHITE;
 
@@ -159,7 +189,7 @@ export const DISPLAYS = [
         const v = .45 + .3 * Math.sin(t / (2200 + i * 370) + i) + .1 * Math.sin(t / 430 + i * 2);
         const x = w * .08 + i * bw * 1.6;
         // Outlined bars with a light fill; CO2 carries the yellow indicator.
-        ctx.fillStyle = i === 2 ? CHIP : 'rgba(244,244,244,.22)';
+        ctx.fillStyle = i === 2 ? CHIP : inkAt(.22);
         ctx.fillRect(x, base - v * h * .62, bw, v * h * .62);
         ctx.strokeStyle = WHITE; ctx.lineWidth = 1; ctx.strokeRect(x + .5, base - v * h * .62 + .5, bw - 1, v * h * .62);
         text(ctx, l, x + bw / 2, base + h * .1, Math.min(u * .065, bw * .42), WHITE, 'center');
@@ -359,10 +389,8 @@ export async function eyeFrame(blob, ship) {
 // Panels pushed by the server (boards/index.js) temporarily replace the ship's systems. Simple view shows
 // only the letters (their status colours the panel); Descriptive view draws the live value, trend or list.
 
-// Muted Discovery fields (same family as the ship systems); health is shown by tags, not by the field colour.
-const BOARD_COLORS = ['#3c55a5', '#2e5d5a', '#5a3f62', '#4b6189', '#2e5bad', '#18204a'];
 // Values stay white; WARNING tints them chip-yellow. CRITICAL is carried by the panel's CRIT tag.
-const STATUS_INK = { ok: WHITE, warn: CHIP, crit: WHITE, nodata: DIM };
+const STATUS_INK = { get ok() { return WHITE; }, get warn() { return CHIP; }, get crit() { return WHITE; }, get nodata() { return DIM; } };
 
 // Helpers for board text: word-wrap, truncate to width, and show a time as HH:MM.
 function wrap(ctx, str, maxW, size, face = FONT, weight = 400, maxLines = 5) {
@@ -413,13 +441,40 @@ function drawMarks(ctx, marks, box, u, d, hl) {
     if (labelled && k >= 0) {
       used[k].push([a, b]);
       // A dark plate behind the words, so they stay readable over the trend and threshold lines.
-      ctx.fillStyle = on ? 'rgba(0,0,0,.8)' : 'rgba(18, 16, 40, .62)';
+      ctx.fillStyle = on ? ground(.8) : veil(.62);
       ctx.fillRect(a - 3, yTop + fs * .12, b - a + 6, fs * 1.18);
       text(ctx, label, m.rightward ? a : b, yTop + fs, fs, colour, m.rightward ? 'left' : 'right');
       d?.markHits.push({ x0: a - 3, x1: b + 3, y0: yTop, y1: yTop + fs * 1.4, mark: m });
     }
     ctx.globalAlpha = 1;
   }
+}
+
+// Squarified treemap (Bruls, Huizing & van Wijk): items [{ a: area weight, ...}], largest first, into the rectangle
+// x, y, w, h -> [{ it, x, y, w, h }], each cell as close to square as the row allows.
+function squarify(items, x, y, w, h) {
+  const out = [], total = items.reduce((s, it) => s + it.a, 0);
+  if (!total || w <= 0 || h <= 0) return out;
+  const scale = (w * h) / total;
+  let rest = items.map(it => ({ it, area: it.a * scale }));
+  const worst = (row, side) => { const s = row.reduce((a, r) => a + r.area, 0), mx = Math.max(...row.map(r => r.area)), mn = Math.min(...row.map(r => r.area)); return Math.max((side * side * mx) / (s * s), (s * s) / (side * side * mn)); };
+  while (rest.length) {
+    const side = Math.min(w, h), row = [rest[0]];
+    let i = 1;
+    while (i < rest.length && worst([...row, rest[i]], side) <= worst(row, side)) row.push(rest[i++]);
+    rest = rest.slice(i);
+    const s = row.reduce((a, r) => a + r.area, 0);
+    if (w >= h) {   // a column on the left
+      const cw = s / h; let cy = y;
+      for (const r of row) { const ch = r.area / cw; out.push({ it: r.it, x, y: cy, w: cw, h: ch }); cy += ch; }
+      x += cw; w -= cw;
+    } else {        // a row along the top
+      const rh = s / w; let cx = x;
+      for (const r of row) { const rw = r.area / rh; out.push({ it: r.it, x: cx, y, w: rw, h: rh }); cx += rw; }
+      y += rh; h -= rh;
+    }
+  }
+  return out;
 }
 
 function fit(ctx, str, maxW, size) {
@@ -452,10 +507,35 @@ export function boardPanel(p, index) {
   function drawPanel(ctx, w, h, t = 0, ship, frame = {}) {
     {
       const u = Math.min(w, h), q = d.data, ink = STATUS_INK[q.status] ?? WHITE;
+      // Each kind sets its own hover and click areas as it draws: never ones left over from what the card drew before
+      // (the monitor keeps a panel's object when HAL updates the card, even into another kind).
+      d.tipAt = null; d.fixHit = null; d.hits = []; d.markHits = []; d.eventHits = [];
       const head = frame.top || u * .1;
       const HY = Math.max(u * .16, head + u * .09);    // headline baseline, clear of the status tag
       const BODY = Math.max(h * .26, HY + u * .05);    // where content starts below the headline
       grid(ctx, w, h, h / 6);
+      // Hover on a panel of rows (list, bargauge): the row under the pointer outlined, and a tooltip with its full name,
+      // its value, its rank and share, and how far it is from the warn and crit lines.
+      const rowHover = (items, top, rowH, x0, x1, show) => {
+        const rowAt = py => { const i = Math.floor((py - top) / rowH); return py >= top && i < items.length ? i : -1; };
+        if (Number.isFinite(d.hoverX) && d.hoverX >= x0 && d.hoverX <= x1) {
+          const i = rowAt(d.hoverY);
+          if (i >= 0) { ctx.strokeStyle = inkAt(.7); ctx.lineWidth = 1; ctx.strokeRect(x0 - 3.5, top + i * rowH + .5, x1 - x0 + 7, rowH - 1); }
+        }
+        const total = items.reduce((a, it) => a + (Number.isFinite(it.value) ? it.value : 0), 0);
+        d.tipAt = (px, py) => {
+          if (px < x0 || px > x1) return null;
+          const i = rowAt(py), it = items[i];
+          if (!it) return null;
+          const rows = [{ label: it.label, hero: true, value: show(it) }];
+          if (items.length > 1) rows.push({ label: 'rank', value: `${[...items].sort((a, b) => b.value - a.value).indexOf(it) + 1} of ${items.length} shown` });
+          if (items.length > 1 && total > 0 && q.unit !== '%') rows.push({ label: 'share of shown', value: `${+(100 * it.value / total).toPrecision(2)}%` });
+          for (const [v, name] of [[q.warn, 'warn'], [q.crit, 'crit']]) if (Number.isFinite(v)) rows.push({ label: name, value: it.value >= v ? `over (${v})` : `below (${v})` });
+          return { title: `${q.title ?? d.title ?? ''}${it.status && it.status !== 'ok' ? ` · ${it.status.toUpperCase()}` : ''}`, rows, notes: q.more > 0 ? [`${q.more} more not shown`] : [] };
+        };
+      };
+      // Rows the builder left out (it keeps the unhealthy and the highest): said, so a short list never looks complete.
+      if (q.more > 0 && q.status !== 'nodata') text(ctx, `+${q.more} MORE`, u * .05, head + u * .05, u * .032, DIM);
       if (q.status === 'nodata') {   // the film's own phrase for a dead display
         text(ctx, 'NON', w / 2, h * .48, u * .09, WHITE, 'center', FONT_WIDE);
         text(ctx, 'FUNCTION', w / 2, h * .48 + u * .12, u * .09, WHITE, 'center', FONT_WIDE);
@@ -502,7 +582,7 @@ export function boardPanel(p, index) {
         if (!lines.length) { text(ctx, 'NO MATCHING LINES', w / 2, h / 2, u * .07, DIM, 'center'); return; }
         lines.forEach((l, i) => {
           const y = h * .2 + rowH * (i + .6);
-          const lv = /err|crit|fatal/i.test(l.level) ? '#ff2a12' : /warn/i.test(l.level) ? '#f0b43c' : DIM;
+          const lv = /err|crit|fatal/i.test(l.level) ? RED : /warn/i.test(l.level) ? AMBER : DIM;
           text(ctx, clock(l.time), u * .05, y, rowH * .32, DIM);
           ctx.fillStyle = lv; ctx.fillRect(u * .2, y - rowH * .32, Math.max(3, u / 160), rowH * .4);
           text(ctx, fit(ctx, l.text, w - u * .3, rowH * .34), u * .23, y, rowH * .34, WHITE);
@@ -514,13 +594,14 @@ export function boardPanel(p, index) {
         const items = q.items ?? [];
         text(ctx, `${q.display} ${q.unit && q.unit.trim() !== '%' ? q.unit : ''}`.trim(), w - u * .05, HY, u * .1, ink, 'right');
         if (!items.length) { text(ctx, 'NONE', w / 2, h * .58, u * .09, DIM, 'center'); return; }
-        const top = BODY, rowH = Math.min((h * .96 - top) / items.length, u * .14), max = Math.max(...items.map(i => i.value), 1);
+        const top = BODY, rowH = Math.min((h * .96 - top) / items.length, u * .14), max = Math.max(...items.map(i => i.value)) || 1;   // no floor of 1: ratios and small rates fill their bars too
         items.forEach((it, i) => {
           const y = top + i * rowH;
-          ctx.fillStyle = 'rgba(244,244,244,.12)'; ctx.fillRect(u * .05, y + rowH * .15, (w - u * .1) * (it.value / max), rowH * .7);
+          ctx.fillStyle = inkAt(.12); ctx.fillRect(u * .05, y + rowH * .15, (w - u * .1) * (it.value / max), rowH * .7);
           text(ctx, it.label.length > 34 ? it.label.slice(0, 33) + '…' : it.label, u * .07, y + rowH * .66, rowH * .42, WHITE);
           text(ctx, it.display, w - u * .07, y + rowH * .66, rowH * .42, ink, 'right');
         });
+        rowHover(items, top, rowH, u * .05, w - u * .05, it => it.display);
         return;
       }
 
@@ -531,8 +612,7 @@ export function boardPanel(p, index) {
         text(ctx, clock(end), x1, y, u * .038, DIM, 'right');
         text(ctx, `${q.window ?? 30} MIN`, (x0 + x1) / 2, y, u * .038, DIM, 'center');
       };
-      const RED = '#ff2a12';
-      const STATE_FILL = { ok: 'rgba(244,244,244,.22)', warn: CHIP, crit: RED, nodata: 'transparent' };
+      const STATE_FILL = { ok: inkAt(.22), warn: CHIP, crit: RED, nodata: 'transparent' };
 
       if (q.kind === 'compose' && q.layout === 'story') {   // a story card: its elements stacked, each drawn as its own panel
         const els = q.elements ?? [], total = els.reduce((a, e) => a + e.weight, 0) || 1;
@@ -552,14 +632,14 @@ export function boardPanel(p, index) {
           sub.draw(ctx, w, eh, t, ship, { top: u * .06 });
           ctx.restore();
           const ts = Math.min(u * .028, 15);
-          text(ctx, fit(ctx, String(e.title).toUpperCase(), w * .6, ts), u * .03, y + ts * 1.6, ts, 'rgba(244,244,244,.8)', 'left', FONT_WIDE);
-          if (i) { ctx.strokeStyle = 'rgba(244,244,244,.3)'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(u * .02, y - gap / 2); ctx.lineTo(w - u * .02, y - gap / 2); ctx.stroke(); }
+          text(ctx, fit(ctx, String(e.title).toUpperCase(), w * .6, ts), u * .03, y + ts * 1.6, ts, inkAt(.8), 'left', FONT_WIDE);
+          if (i) { ctx.strokeStyle = inkAt(.3); ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(u * .02, y - gap / 2); ctx.lineTo(w - u * .02, y - gap / 2); ctx.stroke(); }
           // Clicks reach the element's markers, boxes and events too.
           for (const k of ['eventHits', 'markHits', 'hits']) for (const hit of sub[k] ?? []) d[k].push({ ...hit, y0: hit.y0 + y, y1: hit.y1 + y });
           y += eh + gap;
         });
         d.tipAt = (px, py) => { const r = rects.find(r => py >= r.y && py <= r.y + r.h); return r?.sub.tipAt?.(px, py - r.y) ?? null; };
-        if (q.caption) text(ctx, fit(ctx, q.caption, w - u * .1, u * .036), u * .05, h - u * .02, u * .036, 'rgba(244,244,244,.8)');
+        if (q.caption) text(ctx, fit(ctx, q.caption, w - u * .1, u * .036), u * .05, h - u * .02, u * .036, inkAt(.8));
         return;
       }
 
@@ -580,16 +660,18 @@ export function boardPanel(p, index) {
         const legendY = bottom - (legendRows - 1) * ls * 1.45;
         const y1 = legendY - ls * (q.layout === 'bars' ? 1.6 : 2.9);
         const num = v => String(+(+v).toPrecision(3));
-        if (q.caption) text(ctx, fit(ctx, q.caption, w - u * .1, ls * 1.05), u * .05, h * .965, ls * 1.05, 'rgba(244,244,244,.8)');
+        if (q.caption) text(ctx, fit(ctx, q.caption, w - u * .1, ls * 1.05), u * .05, h * .965, ls * 1.05, inkAt(.8));
         // How each style strokes and fills: the hero in the panel's ink and heavier, ghosts faint and dotted.
         const DASHES = [[], [8, 4], [12, 3, 2, 3], [1, 7]];
-        const pen = (st, hero, i) => {
-          ctx.globalAlpha = 1; ctx.lineWidth = hero ? 2 : 1.2; ctx.strokeStyle = hero ? ink : WHITE; ctx.fillStyle = hero ? ink : WHITE;
+        // c: the line's own colour (public/inks.js); the hero keeps the panel's ink.
+        const pen = (st, hero, i, c) => {
+          const col = hero ? ink : (c ?? WHITE);
+          ctx.globalAlpha = 1; ctx.lineWidth = hero ? 2 : 1.2; ctx.strokeStyle = col; ctx.fillStyle = col;
           ctx.setLineDash(st === 'dotted' ? [2, 4] : st === 'faint' ? [2, 4] : st === 'line' && !hero ? DASHES[i % DASHES.length] : []);
-          if (st === 'faint') { ctx.strokeStyle = 'rgba(244,244,244,.6)'; ctx.fillStyle = 'rgba(244,244,244,.3)'; ctx.lineWidth = 1.3; ctx.setLineDash([2, 3]); }
+          if (st === 'faint') { ctx.strokeStyle = c && !hero ? alpha(c, .6) : inkAt(.6); ctx.fillStyle = c && !hero ? alpha(c, .3) : inkAt(.3); ctx.lineWidth = 1.3; ctx.setLineDash([2, 3]); }
         };
-        const sample = (st, hero, i, x, y) => {   // a legend swatch
-          pen(st, hero, i);
+        const sample = (st, hero, i, x, y, c) => {   // a legend swatch
+          pen(st, hero, i, c);
           if (['bars', 'solid'].includes(st) || (st === 'faint' && q.layout === 'bars')) { ctx.setLineDash([]); ctx.fillRect(x, y - ls * .6, u * .05, ls * .5); }
           else if (st === 'outline') { ctx.setLineDash([]); ctx.strokeRect(x, y - ls * .6, u * .05, ls * .5); }
           else if (st === 'points') for (let k = 0; k < 3; k++) ctx.fillRect(x + k * u * .02, y - ls * .45, 3, 3);
@@ -603,8 +685,8 @@ export function boardPanel(p, index) {
           const cols = legendCols, colW = (w - u * .1) / cols;
           items.forEach((it, i) => {
             const x = u * .05 + (i % cols) * colW, y = legendY + Math.floor(i / cols) * ls * 1.45;
-            sample(it.style, it.hero, it.i ?? i, x, y);
-            text(ctx, fit(ctx, it.text, colW - u * .09, ls), x + u * .075, y, ls, it.hero ? WHITE : 'rgba(244,244,244,.8)');
+            sample(it.style, it.hero, it.i ?? i, x, y, it.c);
+            text(ctx, fit(ctx, it.text, colW - u * .09, ls), x + u * .075, y, ls, it.hero ? WHITE : inkAt(.8));
           });
         };
 
@@ -694,7 +776,7 @@ export function boardPanel(p, index) {
         const revealX = x0 + replayF * (x1 - x0);
         if (replayF < 1) { ctx.strokeStyle = WHITE; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(revealX, y0); ctx.lineTo(revealX, y1); ctx.stroke(); }
         for (const sp of q.spans ?? []) {   // shaded ranges, under everything
-          ctx.fillStyle = sp.tone === 'crit' ? 'rgba(255,42,18,.2)' : sp.tone === 'warn' ? 'rgba(230,215,106,.18)' : 'rgba(244,244,244,.09)';
+          ctx.fillStyle = sp.tone === 'crit' ? alpha(RED, .2) : sp.tone === 'warn' ? alpha(CHIP, .18) : inkAt(.09);
           ctx.fillRect(xOf(sp.t0), y0, Math.max(2, xOf(sp.t1) - xOf(sp.t0)), y1 - y0);
           if (sp.label) text(ctx, fit(ctx, sp.label.toUpperCase(), Math.max(u * .15, xOf(sp.t1) - xOf(sp.t0)), ls * .85), xOf(sp.t0) + 3, y1 - ls * .4, ls * .85, sp.tone === 'warn' ? CHIP : WHITE);
         }
@@ -721,9 +803,15 @@ export function boardPanel(p, index) {
         ctx.setLineDash([]);
         drawMarks(ctx, (q.marks ?? []).filter(m => m.t > t0 && m.t < t1).map(m => ({ ...m, x: xOf(m.t) })),
           { left: x0, right: x1, top: y0, bottom: y1 }, u, d, ship?.state?.focusMark);
+        // Each line its own colour and dash, kept by the card across refreshes (public/inks.js keep). The hero is the one
+        // the server chose, so the bright line is always the one the headline, status and markers describe; a line that
+        // stops being the hero goes back to its own remembered colour.
+        const heroKey = (series.find(s => s.hero) ?? {}).key, looks = keepLooks(d.code, series.map(s => s.key ?? s.label), d.color, DASHES.length);
+        const inkOf = s => (s.hero || (heroKey !== undefined && s.key === heroKey) ? undefined : looks[series.indexOf(s)].ink);
+        const dashOf = s => looks[series.indexOf(s)].dash;
         const order = series.map((s, i) => ({ s, i })).sort((a, b) => (a.s.hero - b.s.hero) || ((b.s.style === 'faint') - (a.s.style === 'faint')));
         for (const { s, i } of order) {
-          pen(s.style, s.hero, i);
+          pen(s.style, s.hero, dashOf(s), inkOf(s));
           const pts = s.points.filter(([t]) => t >= t0 - 1 && t <= t1 + 1 && xOf(t) <= revealX + .5);
           if (!pts.length) continue;
           if (s.style === 'bars') {
@@ -734,9 +822,10 @@ export function boardPanel(p, index) {
           }
           if (s.style === 'points') { for (const [t, v] of pts) ctx.fillRect(xOf(t) - 2, yOf(v, s.axis) - 2, 4, 4); continue; }
           ctx.beginPath();
+          const starts = breaksOf(pts, (q.step ?? 0) * 1000);
           pts.forEach(([t, v], j) => {
             const x = xOf(t), y = yOf(v, s.axis);
-            if (!j) return ctx.moveTo(x, y);
+            if (starts(j)) return ctx.moveTo(x, y);
             if (s.style === 'step') ctx.lineTo(x, yOf(pts[j - 1][1], s.axis));
             ctx.lineTo(x, y);
           });
@@ -754,14 +843,14 @@ export function boardPanel(p, index) {
         const fmtV = (v, unit = q.unit) => `${+(+v).toPrecision(3)}${unit && unit !== '%' ? ` ${unit}` : unit === '%' ? '%' : ''}`;
         if (Number.isFinite(d.hoverX) && d.hoverX >= x0 && d.hoverX <= x1 && d.hoverY >= y0 - ls * 2 && d.hoverY <= y1 + ls) {
           const t = timeAt(d.hoverX);
-          ctx.strokeStyle = 'rgba(244,244,244,.7)'; ctx.lineWidth = 1; ctx.setLineDash([3, 3]);
+          ctx.strokeStyle = inkAt(.7); ctx.lineWidth = 1; ctx.setLineDash([3, 3]);
           ctx.beginPath(); ctx.moveTo(d.hoverX, y0); ctx.lineTo(d.hoverX, y1); ctx.stroke(); ctx.setLineDash([]);
-          for (const s2 of series) { const v = valueAt(s2.points, t); if (v === null) continue; ctx.fillStyle = s2.hero ? ink : WHITE; ctx.beginPath(); ctx.arc(d.hoverX, yOf(v, s2.axis), 3.5, 0, Math.PI * 2); ctx.fill(); }
+          for (const s2 of series) { const v = valueAt(s2.points, t); if (v === null) continue; ctx.fillStyle = s2.hero ? ink : (inkOf(s2) ?? WHITE); ctx.beginPath(); ctx.arc(d.hoverX, yOf(v, s2.axis), 3.5, 0, Math.PI * 2); ctx.fill(); }
         }
         d.tipAt = (px, py) => {
           if (px < x0 || px > x1 || py < y0 - ls * 2 || py > y1 + ls) return null;
           const t = timeAt(px), near = (x1 - x0) * .02;
-          const rows = series.map(s2 => ({ label: s2.label, value: valueAt(s2.points, t), hero: s2.hero, unit: onRight(s2) ? s2.unit : q.unit })).filter(r => r.value !== null).map(r => ({ label: r.label, hero: r.hero, value: fmtV(r.value, r.unit) }));
+          const rows = series.map(s2 => ({ label: s2.label, value: valueAt(s2.points, t), hero: s2.hero, ink: inkOf(s2), unit: onRight(s2) ? s2.unit : q.unit })).filter(r => r.value !== null).map(r => ({ label: r.label, hero: r.hero, ink: r.ink, value: fmtV(r.value, r.unit) }));
           const notes = [...(q.events ?? []), ...(q.callouts ?? []).map(c => ({ ...c, source: 'note' }))].filter(e => Math.abs(xOf(e.t) - px) <= near)
             .map(e => `${clock(e.t)} ${e.source === 'traces' ? 'trace' : e.source === 'logs' ? 'log' : 'note'}: ${e.text}${e.riseDisplay ? ` (then ${e.riseDisplay})` : ''}`);
           const changes = (q.marks ?? []).filter(m => Math.abs(xOf(m.t) - px) <= near).map(m => `${clock(m.t)} change: ${m.label}`);
@@ -788,13 +877,13 @@ export function boardPanel(p, index) {
           d.eventHits.push({ x0: e.x - 7, x1: e.x + 7, y0: e.y - 7, y1: e.y + 7, event: e });
         }
         for (const e of placed) {
-          ctx.strokeStyle = 'rgba(244,244,244,.55)'; ctx.lineWidth = 1; ctx.setLineDash([2, 3]);
+          ctx.strokeStyle = inkAt(.55); ctx.lineWidth = 1; ctx.setLineDash([2, 3]);
           ctx.beginPath(); ctx.moveTo(e.x, e.y - 5); ctx.lineTo(e.x, e.ly + ls * .3); ctx.stroke(); ctx.setLineDash([]);
           const extra = e.more ? `  +${e.more}` : '';
           ctx.font = `400 ${ls * .9}px ${FONT}`;
           const w2 = ctx.measureText(e.label + extra).width, a = e.right ? e.a : e.b - w2;
-          ctx.fillStyle = 'rgba(18,16,40,.75)'; ctx.fillRect(a - 3, e.ly - ls * .85, w2 + 6, ls * 1.15);
-          text(ctx, e.label + extra, a, e.ly, ls * .9, e.kind === 'error' ? '#ffb4a8' : WHITE);
+          ctx.fillStyle = veil(.75); ctx.fillRect(a - 3, e.ly - ls * .85, w2 + 6, ls * 1.15);
+          text(ctx, e.label + extra, a, e.ly, ls * .9, e.kind === 'error' ? RED_SOFT : WHITE);
           if (e.riseDisplay) { ctx.font = `400 ${ls * .9}px ${FONT}`; }
           d.eventHits.push({ x0: a - 3, x1: a + w2 + 3, y0: e.ly - ls, y1: e.ly + ls * .3, event: e });
         }
@@ -805,7 +894,7 @@ export function boardPanel(p, index) {
           : `PEAK ${fmtV(cx.peak)} AT ${clock(cx.peakAt)} · TYPICAL ${fmtV(cx.typical)} · ${cx.spikes && cx.spikes <= 6 ? `${cx.spikes} SPIKE${cx.spikes > 1 ? 'S' : ''}, LONGEST ${dur(cx.longestSeconds)}` : `P95 ${fmtV(cx.p95)}`}`;
         if (ctxWords || q.unavailable?.length) text(ctx, fit(ctx, `${ctxWords}${q.unavailable?.length ? `  ·  NO ${q.unavailable.join(', ').toUpperCase()} YET` : ''}`, x1 - x0, ls * .85),
           x0, Math.max(head + ls * 2, y0 - ls * 1.6), ls * .85, DIM);
-        legend(series.map((s, i) => ({ style: s.style, hero: s.hero, i, text: `${s.label} ${s.display}` })));
+        legend(series.map(s => ({ style: s.style, hero: s.hero, i: dashOf(s), c: inkOf(s), text: `${s.label} ${s.display}` })));
         return;
       }
 
@@ -832,12 +921,26 @@ export function boardPanel(p, index) {
         const fs = Math.min(bh * .3, u * .036);
         const FILL = { warn: CHIP, crit: RED };
         // Where each box and arrow is, so a click on one can open a drilldown about it (monitor.html).
-        d.hits = nodes.map(n => { const { x, y } = pos.get(n.id); return { kind: 'node', id: n.id, label: n.label, x0: x - bw / 2, y0: y - bh / 2, x1: x + bw / 2, y1: y + bh / 2, status: n.status }; });
+        d.hits = nodes.map(n => { const { x, y } = pos.get(n.id); return { kind: 'node', id: n.id, label: n.label, x0: x - bw / 2, y0: y - bh / 2, x1: x + bw / 2, y1: y + bh / 2, status: n.status, item: n }; });
+        // Hover: a service or call under the pointer, with its rate, errors and state in full (boxes cut long names).
+        d.tipAt = (px, py) => {
+          const hit = d.hits.find(h2 => px >= h2.x0 && px <= h2.x1 && py >= h2.y0 && py <= h2.y1);
+          if (!hit) return null;
+          const it = hit.item ?? {}, rows = [];
+          if (it.display) rows.push({ label: 'rate', hero: true, value: it.display });
+          if (it.errDisplay) rows.push({ label: 'errors', value: it.errDisplay });
+          if (hit.kind === 'node') {
+            const ins = edges.filter(e => e.to === hit.id).length, outs = edges.filter(e => e.from === hit.id).length;
+            rows.push({ label: 'calls', value: `${ins} in · ${outs} out` });
+          }
+          rows.push({ label: 'state', value: (hit.status ?? 'ok').toUpperCase() });
+          return { title: hit.kind === 'edge' ? hit.label : (it.label ?? hit.label), rows, notes: ['click to ask about it'] };
+        };
         // Calls: a curve from the caller's right edge to the callee's left edge; dashes flow towards the callee.
         for (const e of edges) {
           const a = pos.get(e.from), b = pos.get(e.to);
           if (!a || !b) continue;
-          const bad = e.status === 'warn' || e.status === 'crit', c = bad ? FILL[e.status] : 'rgba(244,244,244,.7)';
+          const bad = e.status === 'warn' || e.status === 'crit', c = bad ? FILL[e.status] : inkAt(.7);
           const x0 = a.x + bw / 2, y0 = a.y, x1 = b.x - bw / 2, y1 = b.y, back = x1 <= x0;
           const cx = back ? Math.max(x0, x1) + colW * .4 : (x0 + x1) / 2;
           ctx.strokeStyle = c; ctx.lineWidth = bad ? 2.5 : 1.2;
@@ -848,7 +951,7 @@ export function boardPanel(p, index) {
           ctx.fillStyle = c;   // arrowhead
           ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x1 - u * .018, y1 - u * .01); ctx.lineTo(x1 - u * .018, y1 + u * .01); ctx.fill();
           const hx = back ? cx - colW * .4 : (x0 + x1) / 2, hy = back ? Math.max(y0, y1) + bh * .9 : (y0 + y1) / 2, r = u * .03;
-          d.hits.push({ kind: 'edge', from: e.from, to: e.to, label: `${e.from} → ${e.to}`, x0: hx - r, y0: hy - r, x1: hx + r, y1: hy + r, status: e.status });
+          d.hits.push({ kind: 'edge', from: e.from, to: e.to, label: `${e.from} → ${e.to}`, x0: hx - r, y0: hy - r, x1: hx + r, y1: hy + r, status: e.status, item: e });
           const label = [e.label, e.display, e.errDisplay && `${e.errDisplay} ERR`].filter(Boolean).join(' · ');
           if (label && (bad || colW - bw > u * .13)) {   // quiet rates only where the gap leaves room
             const mx = back ? cx - colW * .4 : (x0 + x1) / 2, my = back ? Math.max(y0, y1) + bh * .9 : (y0 + y1) / 2 - u * .012;
@@ -859,10 +962,10 @@ export function boardPanel(p, index) {
         for (const n of nodes) {
           const { x, y } = pos.get(n.id), bad = n.status === 'warn' || n.status === 'crit';
           const blink = n.status === 'crit' && Math.floor(t / 600) % 2;
-          ctx.fillStyle = bad ? FILL[n.status] : 'rgba(0,0,0,.28)';
+          ctx.fillStyle = bad ? FILL[n.status] : ground(.28);
           ctx.globalAlpha = blink ? .7 : 1; ctx.fillRect(x - bw / 2, y - bh / 2, bw, bh); ctx.globalAlpha = 1;
           ctx.strokeStyle = bad ? FILL[n.status] : WHITE; ctx.lineWidth = 1.2; ctx.strokeRect(x - bw / 2 + .5, y - bh / 2 + .5, bw - 1, bh - 1);
-          const fg = bad ? '#111' : WHITE;
+          const fg = bad ? DARK : WHITE;
           // Shrink a long name before truncating it.
           ctx.font = `400 ${fs}px ${FONT}`;
           const ls = Math.max(fs * .55, Math.min(fs, fs * (bw - u * .03) / ctx.measureText(n.label).width));
@@ -871,16 +974,108 @@ export function boardPanel(p, index) {
           if (sub) {
             ctx.font = `400 ${fs * .85}px ${FONT}`;
             const ss = Math.max(fs * .5, Math.min(fs * .85, fs * .85 * (bw - u * .03) / ctx.measureText(sub).width));
-            text(ctx, fit(ctx, sub, bw - u * .03, ss), x, y + bh * .3, ss, bad ? '#111' : DIM, 'center');
+            text(ctx, fit(ctx, sub, bw - u * .03, ss), x, y + bh * .3, ss, bad ? DARK : DIM, 'center');
           }
         }
+        return;
+      }
+
+      if (q.kind === 'nodes') {   // a cluster's nodes, each holding its workloads as tiles sized by memory; free memory left empty
+        const list = q.nodes ?? [];
+        text(ctx, q.display, w - u * .05, HY, u * .07, ink, 'right');
+        text(ctx, `${(q.cluster ?? '').toUpperCase()}${q.more ? `  ·  ${q.more} MORE NODES` : ''}`, u * .05, HY, u * .032, DIM);
+        if (!list.length) return;
+        const left = u * .05, right = w - u * .05, top = BODY, bottom = h * .95, gap = u * .025;
+        // A grid of equal boxes, as close to square as the panel allows.
+        let best = null;
+        for (let c = 1; c <= list.length; c++) {
+          const r = Math.ceil(list.length / c), bw = (right - left - gap * (c - 1)) / c, bh = (bottom - top - gap * (r - 1)) / r;
+          const score = Math.min(bw, bh * 1.4);
+          if (!best || score > best.score) best = { c, r, bw, bh, score };
+        }
+        const FILL = { warn: CHIP, crit: RED }, blink = Math.floor(t / 600) % 2;
+        d.hits = [];
+        const fs = Math.min(u * .034, best.bh * .12);
+        list.forEach((n, i) => {
+          const x = left + (i % best.c) * (best.bw + gap), y = top + Math.floor(i / best.c) * (best.bh + gap), bw = best.bw, bh = best.bh;
+          const bad = n.status !== 'ok', edge = bad ? FILL[n.status] : n.unscheduled ? DIM : inkAt(.55);
+          ctx.fillStyle = ground(.28); ctx.fillRect(x, y, bw, bh);
+          ctx.strokeStyle = edge; ctx.lineWidth = bad ? 2 : 1;
+          if (n.unscheduled) ctx.setLineDash([5, 4]);
+          ctx.strokeRect(x + .5, y + .5, bw - 1, bh - 1); ctx.setLineDash([]);
+          // Header: the node's name, its notes, and how full its memory is (a bar under the name).
+          const hh = fs * 2.1, pad = fs * .4;
+          const tag = [n.display, ...n.notes].filter(Boolean).join(' · ');
+          ctx.font = `400 ${fs * .85}px ${FONT}`;
+          const tagW = tag ? ctx.measureText(tag).width + pad : 0;
+          text(ctx, fit(ctx, n.name, bw - pad * 2 - tagW, fs), x + pad, y + fs * 1.1, fs, bad ? FILL[n.status] : WHITE);
+          if (tag) text(ctx, tag, x + bw - pad, y + fs * 1.1, fs * .85, bad ? FILL[n.status] : DIM, 'right');
+          if (Number.isFinite(n.pct)) {
+            const by = y + fs * 1.55, bwid = bw - pad * 2;
+            ctx.fillStyle = inkAt(.12); ctx.fillRect(x + pad, by, bwid, fs * .22);
+            ctx.fillStyle = bad && n.pct >= 85 ? FILL[n.status] : inkAt(.6); ctx.fillRect(x + pad, by, bwid * Math.min(1, n.pct / 100), fs * .22);
+          }
+          d.hits.push({ kind: 'k8snode', id: n.name, label: n.name, x0: x, y0: y, x1: x + bw, y1: y + hh, status: n.status, item: n });
+          // Body: a treemap of workloads by memory against the node's allocatable memory (the rest is free, left
+          // empty); workloads with no memory figure still get a sliver so they show.
+          const bx = x + pad, by = y + hh, bbw = bw - pad * 2, bbh = bh - hh - pad;
+          if (bbw < 4 || bbh < 4) return;
+          const total = Math.max(n.alloc || 0, n.used || 0) || n.workloads.reduce((a, wl) => a + (wl.mem || 0), 0) || 1;
+          const items = n.workloads.map(wl => ({ wl, a: Math.max(wl.mem || 0, total * .02) })).sort((a2, b2) => b2.a - a2.a);
+          const sum = items.reduce((a, it) => a + it.a, 0);
+          if (n.alloc && sum < total) items.push({ free: true, a: total - sum });   // last, so free memory is the space left over
+          const rects = squarify(items, bx, by, bbw, bbh);
+          for (const { it, x: tx, y: ty, w: tw, h: th } of rects) {
+            if (it.free) continue;
+            const wl = it.wl, wbad = wl.status !== 'ok', g = Math.min(2, tw * .08, th * .08);
+            ctx.fillStyle = wbad ? FILL[wl.status] : water(.18);
+            ctx.globalAlpha = wl.status === 'crit' && blink ? .7 : 1;
+            ctx.fillRect(tx + g, ty + g, tw - g * 2, th - g * 2); ctx.globalAlpha = 1;
+            ctx.strokeStyle = wbad ? FILL[wl.status] : water(.5); ctx.lineWidth = 1;
+            ctx.strokeRect(tx + g + .5, ty + g + .5, tw - g * 2 - 1, th - g * 2 - 1);
+            const ts = Math.min(fs * .85, th * .32);
+            if (tw > ts * 3 && th > ts * 1.4) {
+              const fg = wbad ? DARK : WHITE;
+              text(ctx, fit(ctx, wl.name, tw - g * 2 - ts * .6, ts), tx + g + ts * .3, ty + g + ts * 1.1, ts, fg);
+              const sub = [wl.pods.length > 1 && `×${wl.pods.length}`, wl.display, wbad && wl.reason].filter(Boolean).join(' · ');
+              if (sub && th > ts * 2.7) text(ctx, fit(ctx, sub, tw - g * 2 - ts * .6, ts * .8), tx + g + ts * .3, ty + g + ts * 2.2, ts * .8, wbad ? DARK : DIM);
+            }
+            d.hits.push({ kind: 'workload', id: `${wl.namespace}/${wl.name}@${n.name}`, label: `${wl.name} on ${n.name}`, x0: tx, y0: ty, x1: tx + tw, y1: ty + th, status: wl.status, item: wl, node: n });
+          }
+        });
+        // Hover: the tile or node header under the pointer, outlined, with what it is and why it is lit.
+        const under = (px, py) => [...d.hits].reverse().find(h2 => px >= h2.x0 && px <= h2.x1 && py >= h2.y0 && py <= h2.y1);
+        if (Number.isFinite(d.hoverX)) {
+          const hv = under(d.hoverX, d.hoverY);
+          if (hv) { ctx.strokeStyle = WHITE; ctx.lineWidth = 1.5; ctx.setLineDash([3, 3]); ctx.strokeRect(hv.x0 + .5, hv.y0 + .5, hv.x1 - hv.x0 - 1, hv.y1 - hv.y0 - 1); ctx.setLineDash([]); }
+        }
+        const gib = v => (!Number.isFinite(v) || !v ? '—' : v >= 1024 ** 3 ? `${(v / 1024 ** 3).toFixed(1)} GiB` : `${Math.round(v / 1024 ** 2)} MiB`);
+        d.tipAt = (px, py) => {
+          const hv = under(px, py);
+          if (!hv) return null;
+          if (hv.kind === 'k8snode') {
+            const n = hv.item, rows = [];
+            if (Number.isFinite(n.pct)) rows.push({ label: 'memory', hero: true, value: `${Math.round(n.pct)}%`, ink: n.status === 'ok' ? undefined : FILL[n.status] });
+            rows.push({ label: 'used of allocatable', value: `${gib(n.used)} of ${gib(n.alloc)}` }, { label: 'workloads', value: `${n.workloads.length} · ${n.podCount} pod${n.podCount === 1 ? '' : 's'}` });
+            if (!n.unscheduled) rows.push({ label: 'state', value: [n.ready ? 'Ready' : 'NOT READY', n.cordoned && 'cordoned'].filter(Boolean).join(', ') });
+            const lit = n.workloads.filter(wl => wl.status !== 'ok');
+            return { title: n.unscheduled ? 'Pods no node has taken' : `node ${n.name}`, rows,
+              notes: [...(lit.length ? [`in trouble: ${lit.map(wl => wl.name).join(', ')}`] : []), 'click to ask about it'] };
+          }
+          const wl = hv.item, rows = [{ label: 'memory', hero: true, value: wl.display ? `${wl.display} ${wl.memShown}` : 'no figure' },
+            { label: 'pods here', value: String(wl.pods.length) }, { label: 'kind', value: `${wl.kind}${wl.namespace ? ` · ${wl.namespace}` : ''}` }];
+          if (wl.restarts) rows.push({ label: 'restarts (1 h)', value: String(wl.restarts) });
+          if (hv.node.alloc && wl.mem) rows.push({ label: 'share of node', value: `${Math.round((100 * wl.mem) / hv.node.alloc)}%` });
+          const notes = wl.pods.filter(pd => pd.status !== 'ok').slice(0, 4).map(pd => `${pd.name}: ${pd.reason ?? pd.phase}${pd.restarts ? `, ${pd.restarts} restarts` : ''}`);
+          return { title: `${wl.name} · ${hv.node.unscheduled ? 'not scheduled' : hv.node.name}${wl.status !== 'ok' ? ` · ${wl.status.toUpperCase()}` : ''}`, rows, notes: [...notes, 'click to ask about it'] };
+        };
         return;
       }
 
       if (q.kind === 'timeline') {   // the story over time: the signal on top, what happened along one time axis below
         const evs = q.events ?? [], t0 = q.start, t1 = Math.max(q.end, t0 + 60_000), x0 = u * .05, x1 = w - u * .05;
         const xOf = tt => x0 + Math.min(1, Math.max(0, (tt - t0) / (t1 - t0))) * (x1 - x0);
-        const COLOR = { alert: RED, resolve: '#9fe0a0', change: CHIP, ack: WHITE, aiden: '#8fd3ff', plan: '#f0b43c', incident: 'rgba(244,244,244,.75)' };
+        const COLOR = { alert: RED, resolve: GREEN, change: CHIP, ack: WHITE, aiden: BLUE, plan: AMBER, incident: inkAt(.75) };
         const GLYPH = { alert: 'tri', resolve: 'tri-down', change: 'diamond', ack: 'dot', aiden: 'ring', plan: 'square', incident: 'diamond-o' };
         text(ctx, q.display, w - u * .05, HY, u * .07, ink, 'right');
         text(ctx, `${evs.length} EVENT${evs.length === 1 ? '' : 'S'}`, x0, HY, u * .032, DIM);
@@ -891,17 +1086,36 @@ export function boardPanel(p, index) {
           const vals = pts.map(p => p[1]), marks = [q.crit, q.warn].filter(Number.isFinite);
           const lo = Math.min(...vals, ...marks.filter(m => m < Math.max(...vals) * 3)), hi = Math.max(...vals, ...marks.filter(m => m < Math.max(...vals) * 3)) || 1;
           const span = hi - lo || 1, yOf = v => sigB - ((v - lo) / span) * (sigB - top - u * .02);
-          ctx.strokeStyle = 'rgba(244,244,244,.12)'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(x0, sigB); ctx.lineTo(x1, sigB); ctx.stroke();
+          ctx.strokeStyle = inkAt(.12); ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(x0, sigB); ctx.lineTo(x1, sigB); ctx.stroke();
           for (const [m, c] of [[q.crit, RED], [q.warn, CHIP]]) if (Number.isFinite(m) && m >= lo && m <= hi) {
             ctx.strokeStyle = c; ctx.setLineDash([6, 5]); ctx.beginPath(); ctx.moveTo(x0, yOf(m)); ctx.lineTo(x1, yOf(m)); ctx.stroke(); ctx.setLineDash([]);
           }
           ctx.strokeStyle = WHITE; ctx.lineWidth = 1.6; ctx.beginPath();
           pts.forEach(([tt, v], i) => (i ? ctx.lineTo(xOf(tt), yOf(v)) : ctx.moveTo(xOf(tt), yOf(v))));
           ctx.stroke();
+          // Hover on the signal: a crosshair, a dot on the line, the value then and the events near it (each event's own
+          // mark still shows its full text).
+          const step = Math.min(...pts.slice(1).map(([tt], i) => tt - pts[i][0]).filter(x => x > 0)) || (t1 - t0);
+          const at = px => { const tt = t0 + ((px - x0) / (x1 - x0)) * (t1 - t0); const p2 = pts.reduce((a, b) => (Math.abs(b[0] - tt) < Math.abs(a[0] - tt) ? b : a)); return { tt, p2: Math.abs(p2[0] - tt) <= step * 1.5 ? p2 : null }; };
+          const onSig = (px, py) => px >= x0 && px <= x1 && py >= top - u * .02 && py <= sigB + u * .01;
+          if (Number.isFinite(d.hoverX) && onSig(d.hoverX, d.hoverY)) {
+            const { p2 } = at(d.hoverX);
+            ctx.strokeStyle = inkAt(.7); ctx.lineWidth = 1; ctx.setLineDash([3, 3]);
+            ctx.beginPath(); ctx.moveTo(d.hoverX, top); ctx.lineTo(d.hoverX, sigB); ctx.stroke(); ctx.setLineDash([]);
+            if (p2) { ctx.fillStyle = WHITE; ctx.beginPath(); ctx.arc(xOf(p2[0]), yOf(p2[1]), 3.5, 0, Math.PI * 2); ctx.fill(); }
+          }
+          d.tipAt = (px, py) => {
+            if (!onSig(px, py)) return null;
+            const { tt, p2 } = at(px), near = (t1 - t0) * .02;
+            const fmtV = v => `${+(+v).toPrecision(3)}${q.unit === '%' ? '%' : q.unit ? ` ${q.unit}` : ''}`;
+            return { title: `${clock(p2?.[0] ?? tt)} · ${Math.round((Date.now() - (p2?.[0] ?? tt)) / 60000)} min ago`,
+              rows: [{ label: q.signalLabel ?? 'signal', hero: true, value: p2 ? fmtV(p2[1]) : 'no data' }],
+              notes: (q.events ?? []).filter(e => Math.abs(e.t - tt) <= near).slice(0, 4).map(e => `${clock(e.t)} ${e.kind}: ${e.label}`) };
+          };
         } else text(ctx, 'NO SIGNAL', (x0 + x1) / 2, (top + sigB) / 2, u * .04, DIM, 'center');
         // Time axis: round clock times, four to six of them.
         const stepMin = [5, 10, 15, 30, 60, 120, 240, 480].find(m => (t1 - t0) / (m * 60_000) <= 6) ?? 720;
-        ctx.strokeStyle = 'rgba(244,244,244,.25)'; ctx.beginPath(); ctx.moveTo(x0, axisY - u * .03); ctx.lineTo(x1, axisY - u * .03); ctx.stroke();
+        ctx.strokeStyle = inkAt(.25); ctx.beginPath(); ctx.moveTo(x0, axisY - u * .03); ctx.lineTo(x1, axisY - u * .03); ctx.stroke();
         for (let tt = Math.ceil(t0 / (stepMin * 60_000)) * stepMin * 60_000; tt <= t1; tt += stepMin * 60_000) {
           ctx.beginPath(); ctx.moveTo(xOf(tt), axisY - u * .04); ctx.lineTo(xOf(tt), axisY - u * .02); ctx.stroke();
           text(ctx, clock(tt), xOf(tt), axisY, u * .028, DIM, 'center');
@@ -955,7 +1169,7 @@ export function boardPanel(p, index) {
         y += fs * .4;
         const MARK = { pending: '□', running: '▶', done: '✓', failed: '✕', skipped: '–' };
         (pl.steps ?? []).forEach((s, i) => {
-          const c = s.status === 'failed' ? '#ff2a12' : s.status === 'done' ? WHITE : s.status === 'running' ? CHIP : 'rgba(244,244,244,.8)';
+          const c = s.status === 'failed' ? RED : s.status === 'done' ? WHITE : s.status === 'running' ? CHIP : inkAt(.8);
           text(ctx, `${MARK[s.status] ?? '□'} ${i + 1}`, left, y, fs, c);
           text(ctx, fit(ctx, `${s.tool} · ${s.why}`, maxW - fs * 3, fs), left + fs * 3, y, fs, c);
           y += fs * 1.45;
@@ -983,7 +1197,7 @@ export function boardPanel(p, index) {
         } else {
           // Working: a slow sweep along a rule, like a scan in progress.
           const y = top + (h * .95 - top) * .45, x = left + ((t / 2600) % 1) * maxW;
-          ctx.fillStyle = 'rgba(244,244,244,.15)'; ctx.fillRect(left, y, maxW, 2);
+          ctx.fillStyle = inkAt(.15); ctx.fillRect(left, y, maxW, 2);
           if (!['unmatched', 'failed', 'error'].includes(a.status)) { ctx.fillStyle = WHITE; ctx.fillRect(x - u * .06, y - 1, u * .12, 4); }
           const note = { matching: 'Finding the alert in Aiden', queued: 'Waiting for an investigator', running: 'Agents are gathering and checking evidence',
             unmatched: 'Aiden has no record of this alert', failed: 'The investigation did not complete', error: a.error || 'Aiden could not be reached' }[a.status] ?? a.status;
@@ -1013,14 +1227,14 @@ export function boardPanel(p, index) {
         const rowH = Math.min(u * .06, (bottom - top) / Math.max(spans.length, 1)), fs = Math.min(rowH * .62, u * .03);
         const xOf = v => x0 + (v / us) * (x1 - x0);
         // Time axis: quarter marks across the top of the bars.
-        ctx.strokeStyle = 'rgba(244,244,244,.12)'; ctx.lineWidth = 1;
+        ctx.strokeStyle = inkAt(.12); ctx.lineWidth = 1;
         for (let i = 0; i <= 4; i++) {
           const x = xOf((us * i) / 4);
           ctx.beginPath(); ctx.moveTo(x, top); ctx.lineTo(x, top + rowH * spans.length); ctx.stroke();
           if (i && i < 4 && (x1 - x0) > u * .5) text(ctx, dur((us * i) / 4), x, top - u * .008, u * .026, DIM, 'center');
         }
         spans.forEach((s, i) => {
-          const y = top + rowH * i, c = s.err ? RED : s.crit ? WHITE : 'rgba(244,244,244,.35)';
+          const y = top + rowH * i, c = s.err ? RED : s.crit ? WHITE : inkAt(.35);
           const bx = xOf(s.start), bwid = Math.max(2, xOf(s.start + s.dur) - bx);
           ctx.fillStyle = c; ctx.fillRect(bx, y + rowH * .2, bwid, Math.max(1.5, rowH * .6));
           if (fs >= 7) {
@@ -1028,10 +1242,24 @@ export function boardPanel(p, index) {
             text(ctx, fit(ctx, name, labelW - ind - u * .02, fs), left + ind, y + rowH * .72, fs, s.err ? RED : s.crit ? WHITE : DIM);
             const lbl = dur(s.dur), room = x1 - (bx + bwid);
             if (room > fs * 4) text(ctx, lbl, bx + bwid + fs * .4, y + rowH * .72, fs * .85, DIM);
-            else if (bwid > fs * 4) text(ctx, lbl, bx + bwid - fs * .3, y + rowH * .72, fs * .85, '#111', 'right');
+            else if (bwid > fs * 4) text(ctx, lbl, bx + bwid - fs * .3, y + rowH * .72, fs * .85, DARK, 'right');
           }
         });
         if (folded > 0) text(ctx, `+${folded} MORE SPANS`, left, top + rowH * spans.length + u * .035, u * .026, DIM);
+        // Hover: the span under the pointer, outlined: its service and operation in full, when it started, how long it
+        // took and its share of the request, and why it failed.
+        const spanAt = py => { const i = Math.floor((py - top) / rowH); return py >= top && i < spans.length ? i : -1; };
+        if (Number.isFinite(d.hoverX) && d.hoverX >= left && d.hoverX <= right && spanAt(d.hoverY) >= 0) {
+          ctx.strokeStyle = inkAt(.7); ctx.lineWidth = 1; ctx.strokeRect(left - 3.5, top + spanAt(d.hoverY) * rowH + .5, right - left + 7, rowH - 1);
+        }
+        d.tipAt = (px, py) => {
+          const sp = spans[spanAt(py)];
+          if (!sp || px < left || px > right) return null;
+          const f = sp.err ? (q.failures ?? []).find(f => f.service === sp.service && f.op === sp.op) : null;
+          return { title: `${sp.service}${sp.err ? ' · FAILED' : sp.crit ? ' · critical path' : ''}`,
+            rows: [{ label: sp.op, hero: true, value: dur(sp.dur) }, { label: 'started at', value: `+${dur(sp.start)}` },
+              { label: 'of the request', value: `${+(100 * sp.dur / us).toPrecision(2)}%` }], notes: f?.msg ? [f.msg] : [] };
+        };
         // Where the time goes (the critical path by service), and the first failure.
         const fy = h * .97 - (q.failures?.length ? u * .045 : 0);
         text(ctx, fit(ctx, `CRITICAL PATH  ${(q.critical ?? []).map(c => `${c.service} ${c.display}`).join('  ·  ')}`, right - left, u * .03), left, fy, u * .03, WHITE);
@@ -1066,24 +1294,49 @@ export function boardPanel(p, index) {
           text(ctx, `${name} ${v}`, x1, yOf(v) - 4, u * .034, c, 'right');
         }
         if (q.since && q.since > t0 && q.since < t1) {
-          ctx.strokeStyle = 'rgba(244,244,244,.6)'; ctx.setLineDash([2, 4]);
+          ctx.strokeStyle = inkAt(.6); ctx.setLineDash([2, 4]);
           ctx.beginPath(); ctx.moveTo(xOf(q.since), y0); ctx.lineTo(xOf(q.since), y1); ctx.stroke();
         }
         drawMarks(ctx, (q.marks ?? []).filter(m => m.t > t0 && m.t < t1).map(m => ({ ...m, x: xOf(m.t) })),
           { left: x0, right: x1, top: y0, bottom: y1 }, u, d, ship?.state?.focusMark);   // changes during the window
         const DASHES = [[], [8, 4], [2, 4], [12, 3, 2, 3], [1, 7]];
+        // Colours and dashes kept by the card across refreshes (public/inks.js keep); the first line, the one the headline
+        // reads, is in the panel's ink.
+        const leadIx = 0;
+        const gLooks = keepLooks(d.code, lines.map(l => l.label), d.color, DASHES.length - 1);
+        const gInk = i => (i === leadIx ? ink : gLooks[i].ink), gDash = i => DASHES[i === leadIx ? 0 : gLooks[i].dash + 1];
         lines.forEach((l, i) => {
-          ctx.strokeStyle = i ? WHITE : ink; ctx.lineWidth = i ? 1.2 : 1.8; ctx.setLineDash(DASHES[i % DASHES.length]);
+          ctx.strokeStyle = gInk(i); ctx.lineWidth = i === leadIx ? 1.8 : 1.2; ctx.setLineDash(gDash(i));
           ctx.beginPath();
-          l.points.forEach(([t, v], j) => j ? ctx.lineTo(xOf(t), yOf(v)) : ctx.moveTo(xOf(t), yOf(v)));
+          const starts = breaksOf(l.points);
+          l.points.forEach(([t, v], j) => (starts(j) ? ctx.moveTo(xOf(t), yOf(v)) : ctx.lineTo(xOf(t), yOf(v))));
           ctx.stroke();
         });
         ctx.setLineDash([]);
+        // Hover: a crosshair at that moment with a dot on each line, and every line's value then, highest first.
+        const step = Math.min(...lines.flatMap(l => l.points.slice(1).map(([t], j) => t - l.points[j][0])).filter(x => x > 0)) || (t1 - t0);
+        const valueAt = (pts, t) => { let best = null; for (const p of pts) if (!best || Math.abs(p[0] - t) < Math.abs(best[0] - t)) best = p; return best && Math.abs(best[0] - t) <= step * 1.5 ? best[1] : null; };
+        const timeAt = px => t0 + ((px - x0) / (x1 - x0 || 1)) * (t1 - t0);
+        const fmtV = v => `${+(+v).toPrecision(3)}${q.unit === '%' ? '%' : q.unit ? ` ${q.unit}` : ''}`;
+        const inPlot = (px, py) => px >= x0 && px <= x1 && py >= y0 - u * .04 && py <= y1 + u * .02;
+        if (Number.isFinite(d.hoverX) && inPlot(d.hoverX, d.hoverY)) {
+          const t = timeAt(d.hoverX);
+          ctx.strokeStyle = inkAt(.7); ctx.lineWidth = 1; ctx.setLineDash([3, 3]);
+          ctx.beginPath(); ctx.moveTo(d.hoverX, y0); ctx.lineTo(d.hoverX, y1); ctx.stroke(); ctx.setLineDash([]);
+          lines.forEach((l, i) => { const v = valueAt(l.points, t); if (v === null) return; ctx.fillStyle = gInk(i); ctx.beginPath(); ctx.arc(d.hoverX, yOf(v), 3.5, 0, Math.PI * 2); ctx.fill(); });
+        }
+        d.tipAt = (px, py) => {
+          if (!inPlot(px, py)) return null;
+          const t = timeAt(px);
+          const rows = lines.map((l, i) => ({ label: l.label, ink: gInk(i), hero: i === leadIx, v: valueAt(l.points, t) }))
+            .sort((a, b) => (b.v ?? -Infinity) - (a.v ?? -Infinity)).map(r => ({ label: r.label, ink: r.ink, hero: r.hero, value: r.v === null ? 'no data' : fmtV(r.v) }));
+          return { title: `${clock(t)} · ${Math.round((Date.now() - t) / 60000)} min ago`, rows, notes: q.more > 0 ? [`${q.more} more series not shown`] : [] };
+        };
         // Legend under the time axis: a stroke sample, the series name and its latest value.
         const cols = Math.min(lines.length, w > h * 1.4 ? 3 : 2), colW = (x1 - x0 + u * .11) / cols, ls = u * .036;
         lines.forEach((l, i) => {
           const x = u * .05 + (i % cols) * colW, y = h * .92 + Math.floor(i / cols) * ls * 1.5;
-          ctx.strokeStyle = WHITE; ctx.lineWidth = 1.4; ctx.setLineDash(DASHES[i % DASHES.length]);
+          ctx.strokeStyle = gInk(i); ctx.lineWidth = 1.4; ctx.setLineDash(gDash(i));
           ctx.beginPath(); ctx.moveTo(x, y - ls * .35); ctx.lineTo(x + u * .06, y - ls * .35); ctx.stroke(); ctx.setLineDash([]);
           text(ctx, fit(ctx, `${l.label} ${l.display}`, colW - u * .09, ls), x + u * .075, y, ls, WHITE);
         });
@@ -1101,16 +1354,23 @@ export function boardPanel(p, index) {
           const y = top + i * rowH, bh = rowH * .72;
           text(ctx, fit(ctx, b.label, x0 - u * .07, rowH * .34), u * .05, y + rowH * .5, rowH * .34, WHITE);
           b.segs.forEach((s, j) => {
-            // A run lasts until the next one starts (the last runs to the end of the window).
-            const xa = xOf(s.from), xb = Math.max(xa + 2, j === b.segs.length - 1 ? x1 : xOf(b.segs[j + 1].from));
+            // A run lasts until a step past its last sample (the builder ends it there): gaps, and a series that stopped
+            // reporting, stay empty instead of carrying the last state on to now.
+            const xa = xOf(s.from), xb = Math.max(xa + 2, Math.min(x1, s.to ? xOf(s.to) : j === b.segs.length - 1 ? x1 : xOf(b.segs[j + 1].from)));
             ctx.fillStyle = STATE_FILL[s.status] ?? STATE_FILL.ok; ctx.fillRect(xa, y + rowH * .14, xb - xa, bh);
             const fs = rowH * .3;
             ctx.font = `400 ${fs}px ${FONT}`;
             if (ctx.measureText(s.name).width < xb - xa - 8)
-              text(ctx, s.name, xa + 5, y + rowH * .14 + bh / 2 + fs * .35, fs, s.status === 'ok' ? WHITE : '#111', 'left');
+              text(ctx, s.name, xa + 5, y + rowH * .14 + bh / 2 + fs * .35, fs, s.status === 'ok' ? WHITE : DARK, 'left');
           });
           ctx.strokeStyle = FAINT; ctx.lineWidth = 1; ctx.strokeRect(x0 + .5, y + rowH * .14 + .5, x1 - x0 - 1, bh - 1);
         });
+        d.tipAt = (px, py) => {
+          if (px < x0 || px > x1 || py < top || py > top + bands.length * rowH) return null;
+          const b = bands[Math.floor((py - top) / rowH)], t = q.start + ((px - x0) / (x1 - x0)) * span;
+          const seg = b?.segs.find(s => t >= s.from && t <= (s.to ?? s.from));
+          return b ? { title: `${clock(t)} · ${Math.round((Date.now() - t) / 60000)} min ago`, rows: [{ label: b.label, hero: true, value: seg ? seg.name : 'no data' }], notes: [] } : null;
+        };
         timeAxis(x0, x1, top + bands.length * rowH + u * .05, q.start, q.end);
         return;
       }
@@ -1129,11 +1389,28 @@ export function boardPanel(p, index) {
             Math.min(rowH * .55, u * .04), DIM, 'right');
           r.cells.forEach((v, j) => {
             if (!(v > 0)) return;
-            ctx.fillStyle = `rgba(244,244,244,${(.08 + .92 * Math.sqrt(v / max)).toFixed(3)})`;   // sqrt: faint cells stay visible
+            ctx.fillStyle = inkAt((.08 + .92 * Math.sqrt(v / max)).toFixed(3));   // sqrt: faint cells stay visible
             ctx.fillRect(x0 + j * cw + .5, y + .5, Math.max(1, cw - 1), Math.max(1, rowH - 1));
           });
         });
         ctx.strokeStyle = DIM; ctx.lineWidth = 1; ctx.strokeRect(x0, top, x1 - x0, bottom - top);
+        // Hover: the cell under the pointer, outlined, and its own row, moment and value.
+        const cellAt = (px, py) => {
+          if (px < x0 || px >= x1 || py < top || py >= bottom) return null;
+          const i = Math.floor((py - top) / rowH), j = Math.floor((px - x0) / cw);
+          return order[i] && j < n ? { i, j, r: order[i], v: order[i].cells[j] } : null;
+        };
+        const hc = Number.isFinite(d.hoverX) ? cellAt(d.hoverX, d.hoverY) : null;
+        if (hc) { ctx.strokeStyle = WHITE; ctx.lineWidth = 2; ctx.strokeRect(x0 + hc.j * cw + 1, top + hc.i * rowH + 1, Math.max(1, cw - 2), Math.max(1, rowH - 2)); }
+        const cellUnit = q.cellUnit ?? q.unit ?? '';
+        const show = v => (v === null || v === undefined ? 'no data' : `${+(+v).toPrecision(3)}${cellUnit === '%' ? '%' : cellUnit ? ` ${cellUnit}` : ''}`);
+        d.tipAt = (px, py) => {
+          const c = cellAt(px, py);
+          if (!c) return null;
+          const t = q.times?.[c.j];
+          return { title: t ? `${clock(t)} · ${Math.round((Date.now() - t) / 60000)} min ago` : `${n - c.j} steps ago`,
+            rows: [{ label: c.r.label, hero: true, value: show(c.v) }], notes: q.cellWord ? [q.cellWord] : [] };
+        };
         text(ctx, `${q.window ?? 30} MIN`, (x0 + x1) / 2, bottom + u * .05, u * .038, DIM, 'center');
         text(ctx, 'NOW', x1, bottom + u * .05, u * .038, DIM, 'right');
         return;
@@ -1150,13 +1427,24 @@ export function boardPanel(p, index) {
         ctx.beginPath(); ctx.moveTo(u * .05, top + rowH * .85); ctx.lineTo(w - u * .05, top + rowH * .85); ctx.stroke();
         rows.forEach((r, i) => {
           const y = top + (i + 1) * rowH + rowH * .6;
-          if (i % 2) { ctx.fillStyle = 'rgba(244,244,244,.05)'; ctx.fillRect(u * .05, y - rowH * .62, w - u * .1, rowH); }
+          if (i % 2) { ctx.fillStyle = inkAt(.05); ctx.fillRect(u * .05, y - rowH * .62, w - u * .1, rowH); }
           r.cells.forEach((c, j) => text(ctx, fit(ctx, c, labelW - u * .03, fs), xs[j], y, fs, WHITE));
           if (r.status === 'warn' || r.status === 'crit') {
             ctx.fillStyle = r.status === 'crit' ? RED : CHIP; ctx.fillRect(w - u * .05 - valW + u * .02, y - fs * .75, fs * .6, fs * .6);
           }
           text(ctx, r.display, w - u * .05, y, fs, STATUS_INK[r.status] ?? WHITE, 'right');
         });
+        // Hover: the row under the pointer, outlined, and every column in full (cells are cut to fit).
+        const rowAt = py => { const i = Math.floor((py - top - rowH * .85) / rowH); return py >= top + rowH * .85 && i < rows.length ? i : -1; };
+        if (Number.isFinite(d.hoverX) && d.hoverX >= u * .05 && d.hoverX <= w - u * .05 && rowAt(d.hoverY) >= 0) {
+          ctx.strokeStyle = inkAt(.7); ctx.lineWidth = 1; ctx.strokeRect(u * .05 - 3.5, top + rowH * .85 + rowAt(d.hoverY) * rowH + .5, w - u * .1 + 7, rowH - 1);
+        }
+        d.tipAt = (px, py) => {
+          const r = rows[rowAt(py)];
+          if (!r || px < u * .05 || px > w - u * .05) return null;
+          return { title: `${q.title ?? d.title ?? ''}${r.status && r.status !== 'ok' ? ` · ${r.status.toUpperCase()}` : ''}`,
+            rows: [{ label: cols.at(-1), hero: true, value: r.display }, ...r.cells.map((c, j) => ({ label: cols[j].replace(/^k8s_|_name$/g, ''), value: c }))], notes: [] };
+        };
         return;
       }
 
@@ -1170,7 +1458,7 @@ export function boardPanel(p, index) {
           text(ctx, fit(ctx, it.label, (x1 - x0) * .7, fs), x0, y + fs, fs, WHITE);
           text(ctx, it.display, x1, y + fs, fs, STATUS_INK[it.status] ?? WHITE, 'right');
           for (let s = 0; s < segs; s++) {
-            const at = ((s + 1) / segs) * max, lit = it.value >= (s / segs) * max + max / segs / 2;
+            const at = ((s + .5) / segs) * max, lit = it.value >= (s / segs) * max + max / segs / 2;
             ctx.fillStyle = !lit ? FAINT
               : Number.isFinite(q.crit) && at > q.crit ? RED : Number.isFinite(q.warn) && at > q.warn ? CHIP : WHITE;
             ctx.fillRect(x0 + s * sw + 1, by, sw - 2, bh);
@@ -1181,6 +1469,7 @@ export function boardPanel(p, index) {
             ctx.fillStyle = c; ctx.fillRect(x - 1, by - bh * .3, 2, bh * 1.6);
           }
         });
+        rowHover(items, top, rowH, x0, x1, it => it.display);
         return;
       }
 
@@ -1188,26 +1477,50 @@ export function boardPanel(p, index) {
         const b = q.buckets ?? [];
         text(ctx, `${q.stat ?? ''} ${q.display} ${q.unit && q.unit !== '%' && !/[0-9]m?s$/.test(q.display) ? q.unit : ''}`.trim(), w - u * .05, HY, u * .1, ink, 'right');
         if (q.p50 && q.stat === 'P95') text(ctx, `P50 ${q.p50}`, w - u * .05, HY + u * .07, u * .045, DIM, 'right');
+        if (q.maxLabel) text(ctx, fit(ctx, q.maxLabel, w * .7, u * .045), w - u * .05, HY + u * .07, u * .045, DIM, 'right');   // which series the max is
         if (!b.length) { text(ctx, 'NO SAMPLES', w / 2, h * .58, u * .07, DIM, 'center'); return; }
         const x0 = u * .05, x1 = w - u * .05, y0 = Math.max(h * .3, BODY + u * .05), y1 = h * .84;
         const slot = (x1 - x0) / b.length, gap = Math.max(2, slot * .18), max = Math.max(...b.map(x => x.value)) || 1;
         ticks(ctx, x0, y0, x1, y1, 10);
-        ctx.strokeStyle = 'rgba(244,244,244,.35)'; ctx.lineWidth = 1;
+        ctx.strokeStyle = inkAt(.35); ctx.lineWidth = 1;
         ctx.beginPath(); ctx.moveTo(x0, y1); ctx.lineTo(x1, y1); ctx.stroke();
         const labelSize = Math.min(u * .042, slot * .3);
         b.forEach((bar, i) => {
           const x = x0 + i * slot + gap / 2, bw = slot - gap, bh = (bar.value / max) * (y1 - y0);
-          ctx.fillStyle = 'rgba(244,244,244,.12)'; ctx.fillRect(x, y1 - bh, bw, bh);
+          ctx.fillStyle = inkAt(.12); ctx.fillRect(x, y1 - bh, bw, bh);
           ctx.strokeStyle = WHITE; ctx.lineWidth = 1.2; ctx.strokeRect(x + .5, y1 - bh + .5, bw - 1, Math.max(0, bh - 1));
           // Bounds beneath: every bar when they fit, otherwise every other one.
           if (b.length <= 6 || i % 2 === 0 || i === b.length - 1)
             text(ctx, bar.label, x + bw / 2, y1 + labelSize * 1.5, labelSize, DIM, 'center');
         });
+        // Hover: the bar under the pointer (anywhere in its column), outlined, and what it holds: its range, how much of
+        // the whole, how much at or below it, and the series it is made of.
+        const barAt = px => { const i = Math.floor((px - x0) / slot); return px >= x0 && i < b.length ? i : -1; };
+        const inPlot = (px, py) => px >= x0 && px <= x1 && py >= y0 - u * .04 && py <= y1 + labelSize * 2;
+        if (Number.isFinite(d.hoverX) && inPlot(d.hoverX, d.hoverY) && barAt(d.hoverX) >= 0) {
+          const i = barAt(d.hoverX);
+          ctx.strokeStyle = inkAt(.7); ctx.lineWidth = 1; ctx.setLineDash([3, 3]);
+          ctx.strokeRect(x0 + i * slot + 1.5, y0, slot - 3, y1 - y0); ctx.setLineDash([]);
+        }
+        const total = b.reduce((a, x) => a + x.value, 0) || 1;
+        const num = v => `${+(+v).toPrecision(3)}`;
+        d.tipAt = (px, py) => {
+          if (!inPlot(px, py)) return null;
+          const i = barAt(px), bar = b[i];
+          if (!bar) return null;
+          const upTo = b.slice(0, i + 1).reduce((a, x) => a + x.value, 0);
+          const rows = [{ label: bar.range ?? bar.label, hero: true, value: `${num(bar.value)}${bar.word ? ` ${bar.word}` : ''}` },
+            { label: 'share', value: `${+(100 * bar.value / total).toPrecision(2)}%` },
+            { label: 'at or below', value: `${+(100 * upTo / total).toPrecision(3)}%` },
+            ...(bar.members ?? []).map(m => ({ label: m.name, value: m.display }))];
+          const notes = bar.membersMore ? [`and ${bar.membersMore} more`] : !bar.members?.length && bar.value ? ['this histogram was summed: no per-series names (keep a label, e.g. by (service, le), to see them)'] : [];
+          return { title: q.title ?? d.title ?? '', rows, notes };
+        };
         return;
       }
 
       // Situation board: why this panel is on screen, under the title.
-      if (q.insight) text(ctx, fit(ctx, q.insight, w - u * .1, u * .055), w / 2, h * .2, u * .055, 'rgba(244,244,244,.75)', 'center');
+      if (q.insight) text(ctx, fit(ctx, q.insight, w - u * .1, u * .055), w / 2, h * .2, u * .055, inkAt(.75), 'center');
 
       // Situation board: the most likely fix and what it takes, in a strip along the bottom; clicking it asks the 9000
       // to carry it out (a plan, when a tool can) or say how. H is the height left above it.
@@ -1215,14 +1528,14 @@ export function boardPanel(p, index) {
       const H = q.fix ? h - u * .13 : h;
       if (q.fix) {
         const fh = u * .13, y = h - fh, fs = u * .045;
-        ctx.fillStyle = 'rgba(8,8,24,.42)'; ctx.fillRect(0, y, w, fh);
-        const label = { auto: 'AUTO', quick: 'QUICK', project: 'PROJECT', unknown: 'INVESTIGATE' }[q.fix.effort] ?? 'FIX';
+        ctx.fillStyle = `rgba(${SCRIM},.42)`; ctx.fillRect(0, y, w, fh);
+        const label = q.fix.digging ? 'LOOKING' : { auto: 'AUTO', quick: 'QUICK', project: 'PROJECT', unknown: 'UNCLEAR' }[q.fix.effort] ?? 'FIX';
         ctx.font = `400 ${fs * .9}px ${FONT_WIDE}`;
         const cw = ctx.measureText(label).width + u * .04, cx = u * .04, cy = y + fh / 2;
         // AUTO solid white, QUICK indicator yellow, PROJECT outlined, INVESTIGATE dim: how close the fix is to done.
         if (q.fix.effort === 'auto' || q.fix.effort === 'quick') { ctx.fillStyle = q.fix.effort === 'auto' ? WHITE : CHIP; ctx.fillRect(cx, cy - fs * .8, cw, fs * 1.5); }
         else { ctx.strokeStyle = q.fix.effort === 'project' ? WHITE : DIM; ctx.lineWidth = 1; ctx.strokeRect(cx + .5, cy - fs * .8 + .5, cw - 1, fs * 1.5 - 1); }
-        text(ctx, label, cx + cw / 2, cy + fs * .32, fs * .9, q.fix.effort === 'auto' || q.fix.effort === 'quick' ? '#14143a' : q.fix.effort === 'project' ? WHITE : DIM, 'center', FONT_WIDE);
+        text(ctx, label, cx + cw / 2, cy + fs * .32, fs * .9, q.fix.effort === 'auto' || q.fix.effort === 'quick' ? CHIP_INK : q.fix.effort === 'project' ? WHITE : DIM, 'center', FONT_WIDE);
         const tx = cx + cw + u * .03;
         text(ctx, fit(ctx, `${q.fix.text} ›`, w - tx - u * .04, fs), tx, cy + fs * .35, fs, WHITE);
         d.fixHit = { x0: 0, x1: w, y0: y, y1: h, fix: q.fix };
@@ -1233,13 +1546,21 @@ export function boardPanel(p, index) {
       const vy = q.kind === 'timeseries' ? H * .42 : H * .58;
       text(ctx, q.display, w / 2, vy, big, ink, 'center');
       if (q.unit && q.unit !== '%') text(ctx, q.unit.toUpperCase(), w / 2, vy + u * .1, u * .06, DIM, 'center');
+      if (q.stat) text(ctx, q.stat, w / 2, vy - big * .85, u * .04, DIM, 'center');   // "MAX OF 6": the worst of several series
 
-      // Trend over the last 30 minutes.
-      const s = q.series ?? [];
+      // Trend over the window: each sample at its own time ([ms, value]; older data sends values only, spread evenly).
+      const pts = q.points ?? (q.series ?? []).map((v, i, a) => [Date.now() - (a.length - 1 - i) * ((q.window ?? 30) * 60_000 / Math.max(1, a.length - 1)), v]);
+      const s = pts.map(([, v]) => v);
       if (q.kind === 'timeseries' && s.length > 1) {
         // Scale to the data (with headroom). A threshold is drawn as a line only when it is near the data;
         // a far-off one is noted at the top edge, so the trend never flattens against a distant limit.
-        const yd = q.yesterday?.length > 1 ? q.yesterday : [];   // the same window yesterday, for comparison
+        const ydPts = (q.yesterday ?? []).length > 1 ? (Array.isArray(q.yesterday[0]) ? q.yesterday
+          : q.yesterday.map((v, i, a) => [Date.now() - (a.length - 1 - i) * ((q.window ?? 30) * 60_000 / (a.length - 1)), v])) : [];
+        const yd = ydPts.map(([, v]) => v);   // the same window yesterday, for comparison
+        const span0 = (q.window ?? 30) * 60_000, xOfT = t => u * .05 + (1 - (Date.now() - t) / span0) * (w - u * .1);
+        const step = pts.length > 1 ? Math.min(...pts.slice(1).map(([t], i) => t - pts[i][0]).filter(x => x > 0)) : span0;
+        // A line through the points, broken where samples are missing (more than one and a half steps apart).
+        const trace = list => { ctx.beginPath(); list.forEach(([t, v], i) => { const x = Math.max(u * .05, xOfT(t)), y = yOf(v); i && t - list[i - 1][0] <= step * 1.5 ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }); ctx.stroke(); };
         const dlo = Math.min(...s, ...yd), dhi = Math.max(...s, ...yd), dspan = dhi - dlo || Math.abs(dhi) || 1;
         const near = v => Number.isFinite(v) && v >= dlo - dspan && v <= dhi + dspan * 1.5;
         const marks = [q.warn, q.crit].filter(near);
@@ -1263,28 +1584,33 @@ export function boardPanel(p, index) {
           const frac = 1 - (Date.now() - q.since) / (q.window * 60_000);
           if (frac > 0 && frac < 1) {
             const x = u * .05 + frac * (w - u * .1);
-            ctx.strokeStyle = 'rgba(244,244,244,.6)'; ctx.setLineDash([2, 4]);
+            ctx.strokeStyle = inkAt(.6); ctx.setLineDash([2, 4]);
             ctx.beginPath(); ctx.moveTo(x, y0 - u * .02); ctx.lineTo(x, y1); ctx.stroke(); ctx.setLineDash([]);
             text(ctx, 'SINCE ' + clock(q.since), x + u * .01, y0 - u * .03, u * .04, DIM);
           }
         }
         if (yd.length) {   // yesterday: faint and dotted, under today's line
-          ctx.strokeStyle = 'rgba(244,244,244,.35)'; ctx.lineWidth = 1; ctx.setLineDash([2, 4]);
-          ctx.beginPath();
-          yd.forEach((v, i) => { const x = u * .05 + (i / (yd.length - 1)) * (w - u * .1), y = y1 - ((v - lo) / span) * (y1 - y0); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
-          ctx.stroke(); ctx.setLineDash([]);
+          ctx.strokeStyle = inkAt(.35); ctx.lineWidth = 1; ctx.setLineDash([2, 4]);
+          trace(ydPts.filter(([t]) => xOfT(t) >= u * .05 - 1));
+          ctx.setLineDash([]);
           text(ctx, 'YESTERDAY ···', w - u * .05, H * .97, u * .035, DIM, 'right');
         }
         // Changes (rollouts, config) during the window.
         drawMarks(ctx, (q.marks ?? []).map(m => ({ ...m, x: u * .05 + (1 - (Date.now() - m.t) / ((q.window ?? 30) * 60_000)) * (w - u * .1) }))
           .filter(m => m.x > u * .05 && m.x < w - u * .05), { left: u * .05, right: w - u * .05, top: y0, bottom: y1 }, u, d, ship?.state?.focusMark);
         ctx.strokeStyle = ink; ctx.lineWidth = 1.5;
-        ctx.beginPath();
-        s.forEach((v, i) => {
-          const x = u * .05 + (i / (s.length - 1)) * (w - u * .1), y = y1 - ((v - lo) / span) * (y1 - y0);
-          i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
-        });
-        ctx.stroke();
+        trace(pts);
+        // Hover: the sample nearest the pointer, and yesterday's at the same time of day.
+        const nearest = (list, t) => list.reduce((a, b) => (Math.abs(b[0] - t) < Math.abs(a[0] - t) ? b : a), list[0]);
+        const fmtV = v => `${+(+v).toPrecision(3)}${q.unit === '%' ? '%' : q.unit ? ` ${q.unit}` : ''}`;
+        d.tipAt = (px, py) => {
+          if (px < u * .05 || px > w - u * .05 || py < y0 - u * .04 || py > y1 + u * .02) return null;
+          const t = Date.now() - (1 - (px - u * .05) / (w - u * .1)) * span0, [pt, pv] = nearest(pts, t);
+          if (Math.abs(pt - t) > step * 1.5) return { title: `${clock(t)} · ${Math.round((Date.now() - t) / 60000)} min ago`, rows: [{ label: 'now', hero: true, value: 'no data' }], notes: [] };
+          const y = ydPts.length ? nearest(ydPts, pt) : null;
+          return { title: `${clock(pt)} · ${Math.round((Date.now() - pt) / 60000)} min ago`,
+            rows: [{ label: q.stat ? 'worst series' : 'value', hero: true, value: fmtV(pv) }, ...(y && Math.abs(y[0] - pt) <= step * 1.5 ? [{ label: 'yesterday', value: fmtV(y[1]) }] : [])], notes: [] };
+        };
         text(ctx, `${q.window ?? 30} MIN`, u * .05, H * .97, u * .045, DIM);
       }
     }

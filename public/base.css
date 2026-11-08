@@ -13,6 +13,18 @@
   --field-teal: #2e5d5a;  --field-plum: #5a3f62; --field-navy: #18204a; --field-grey: #626569;
   --chip-yellow: #e6d76a;  /* indicator chip: CAUTION */
 
+  /* Panels (displays.js): what every chart, list and map is drawn with. A UI with its own palette sets these.
+     Triples are "r,g,b" (drawn at many strengths); the rest are hex. */
+  --panel-ink: 244,244,244;    /* hairlines, text and fills */
+  --panel-ground: 0,0,0;       /* shadows and scrims under graphics */
+  --panel-veil: 18,16,40;      /* backing behind labels drawn over data */
+  --panel-scrim: 8,8,24;       /* the fix strip under a situation card */
+  --panel-water: 168,220,255;  /* node pressure */
+  --panel-alarm: #ff2a12; --panel-alarm-soft: #ffb4a8; --panel-amber: #f0b43c;
+  --panel-ok: #9fe0a0; --panel-aiden: #8fd3ff;
+  --panel-dark: #111;          /* text on a bright warning or critical fill */
+  --panel-chip-ink: #14143a;   /* text on a fix chip */
+
   --bg: #000;
   --ink: #f2f2f2;
   /* eye colour per theme; HAL red, SAL blue */

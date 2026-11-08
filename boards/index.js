@@ -26,16 +26,22 @@ import * as fixes from '../fixes/index.js';
 import * as timeline from '../timeline/index.js';
 
 import { readCompose, describeCompose, layersOf } from './compose.js';
+import * as nodeMap from './nodes.js';
+import { VERSION as VIEW, toView, toPanel, check as checkView } from './view.js';
 
 const QUERY_TOOL = process.env.BOARD_QUERY_TOOL || 'query_prometheus';
 const DATASOURCE = process.env.BOARD_DATASOURCE || 'metrics';
 const LOGS_TOOL = process.env.BOARD_LOGS_TOOL || 'query_loki_logs';
 const LOGS_DATASOURCE = process.env.BOARD_LOGS_DATASOURCE || 'loki';
-const KINDS = ['compose', 'stat', 'timeseries', 'graph', 'list', 'bargauge', 'table', 'histogram', 'heatmap', 'state', 'flow', 'trace', 'timeline', 'logs', 'note', 'events'];
+const KINDS = ['compose', 'stat', 'timeseries', 'graph', 'list', 'bargauge', 'table', 'histogram', 'heatmap', 'state', 'flow', 'nodes', 'trace', 'timeline', 'logs', 'note', 'events'];
 const REFRESH_MS = 15_000;
 const MAX_PANELS = 6;
 
-export const available = () => mcp.names().includes(QUERY_TOOL);
+// The booth game's ship readings (game/index.js), for a 9000 with no Grafana: a query naming a ship_* reading is answered
+// from what the 9000 has recorded of the game ship, in Prometheus's shape, so every panel kind can draw it.
+let shipSource = null;
+export const setShipSource = fn => { shipSource = fn; };
+export const available = () => mcp.names().includes(QUERY_TOOL) || !!shipSource;
 
 // ---- curated boards ----------------------------------------------------------------------------------
 // Signals chosen to be meaningful in the connected estate (see the grafana hint in MCP_SERVERS).
@@ -68,6 +74,8 @@ function clusterHealth(cluster) {
 // shift: minutes into the past to move the whole range (1440 = the same window yesterday).
 // step: seconds between points (default: a point per minutes*2 seconds, at least 30).
 export async function prom(expr, range, minutes = 30, shift = 0, step) {
+  if (shipSource && /\bship_[a-z0-9_]+/.test(expr)) return shipSource(expr, range, minutes, shift, step);
+  if (!mcp.names().includes(QUERY_TOOL)) return null;
   const args = range
     ? { datasourceUid: DATASOURCE, expr, queryType: 'range', startTime: `now-${minutes + shift}m`, endTime: shift ? `now-${shift}m` : 'now', stepSeconds: step ?? Math.max(30, Math.round(minutes * 2)) }
     : { datasourceUid: DATASOURCE, expr, queryType: 'instant', endTime: shift ? `now-${shift}m` : 'now' };
@@ -116,11 +124,36 @@ export async function browse({ cluster } = {}) {
   return { clusters: clusters ?? [], cluster: cluster || null, metrics: names.map(name => ({ name, kind: kindOf(name) })) };
 }
 
+// For the canvas: a metric's labels (read off up to 200 of its series, so it works with any Prometheus tool), and the
+// values one label takes for that metric, newest first by name.
+const LABEL_SKIP = new Set(['__name__', 'le']);
+export async function labelsOf({ metric, cluster }) {
+  if (!available() || !/^[a-zA-Z_:][\w:]*$/.test(metric ?? '')) return null;
+  const r = await prom(`topk(200, ${metric}${cluster ? `{cluster=${JSON.stringify(cluster)}}` : ''})`);
+  if (!r) return null;
+  const counts = new Map();
+  for (const s of r) for (const [k, v] of Object.entries(s.metric ?? {})) if (!LABEL_SKIP.has(k)) counts.set(k, (counts.get(k) ?? new Set()).add(v));
+  return [...counts].map(([name, vals]) => ({ name, values: vals.size })).sort((a, b) => a.name.localeCompare(b.name));
+}
+export async function valuesOf({ label, metric, cluster }) {
+  if (!available() || !/^[a-zA-Z_]\w*$/.test(label ?? '')) return null;
+  const filters = [...(metric ? [{ name: '__name__', value: metric, type: '=' }] : []), ...(cluster ? [{ name: 'cluster', value: cluster, type: '=' }] : [])];
+  const text = await mcp.call(NAMES_TOOL, { datasourceUid: DATASOURCE, labelName: label, limit: 500, ...(filters.length && { matches: [{ filters }] }) }, { internal: true });
+  try { const v = JSON.parse(text); const list = v?.data ?? v; return Array.isArray(list) ? list.map(String).sort() : null; } catch { return null; }
+}
+
+// One view read for one ship, without putting it on the board (a canvas draft is read for the person drafting it).
+export async function readView(room, view) {
+  const spec = active.get(room)?.spec ?? home.spec ?? {};
+  return readPanel(view, spec);
+}
+
 const COUNTS = new Set(['pods', 'nodes', 'restarts', 'alerts', 'conns', 'connections', 'errors', 'lines']);
 const fmt = (v, unit) => {
   if (!Number.isFinite(v)) return '—';
   if (COUNTS.has(String(unit).toLowerCase())) return String(Math.round(v));   // counts are whole numbers
-  const n = Math.abs(v) >= 100 ? Math.round(v) : Math.abs(v) >= 10 ? v.toFixed(1) : +v.toFixed(2);
+  // Below 1, two significant figures: an error ratio of 0.004 must never read as 0.
+  const a = Math.abs(v), n = a >= 100 ? Math.round(v) : a >= 10 ? v.toFixed(1) : a >= 1 || !a ? +v.toFixed(2) : +v.toPrecision(2);
   return unit === '%' ? `${n}%` : String(n);
 };
 
@@ -134,14 +167,22 @@ function status(v, p) {
 // ---- baselines and change marks for trends ----------------------------------------------------------------
 // The same window yesterday, drawn faintly behind today's line (cached for five minutes per query and window).
 const ydCache = new Map();
-async function yesterday(query, minutes) {
-  const key = `${minutes}|${query}`, hit = ydCache.get(key);
-  if (hit && Date.now() - hit.at < 5 * 60_000) return hit.series;
+// metric: the labels of the series to follow (the one the panel's headline is about), so yesterday is the same series.
+// -> [[ms, value]], moved forward a day so they sit under today's line.
+async function yesterday(query, minutes, metric) {
+  const key = `${minutes}|${query}|${JSON.stringify(metric ?? {})}`, hit = ydCache.get(key);
+  if (hit && Date.now() - hit.at < 5 * 60_000) return hit.points;
   const r = await prom(query, true, minutes, 1440).catch(() => null);
-  const series = (r?.[0]?.values ?? []).map(([, v]) => parseFloat(v)).filter(Number.isFinite);
+  const points = (pick(r, metric)?.values ?? []).map(([t, v]) => [Math.round(t * 1000) + 86_400_000, parseFloat(v)]).filter(([, v]) => Number.isFinite(v));
   if (ydCache.size > 200) ydCache.clear();
-  ydCache.set(key, { at: Date.now(), series });
-  return series;
+  ydCache.set(key, { at: Date.now(), points });
+  return points;
+}
+// The series with these labels from a Prometheus result (the first, when there are no labels to match).
+const sameLabels = (a = {}, b = {}) => { const ka = Object.keys(a).filter(k => k !== '__name__'), kb = Object.keys(b).filter(k => k !== '__name__'); return ka.length === kb.length && ka.every(k => a[k] === b[k]); };
+function pick(result, metric) {
+  if (!result?.length) return null;
+  return metric ? result.find(s => sameLabels(s.metric, metric)) ?? null : result[0];
 }
 // Changes in the panel's cluster (read from its query) during the window, each tied to what this panel's line did
 // next. points: [[ms, value]] of the panel's (headline) series.
@@ -211,51 +252,79 @@ function merge(bars) {
   while (bars.length > MAX_BARS) {
     let best = 0;
     for (let i = 1; i < bars.length - 1; i++) if (bars[i].value + bars[i + 1].value < bars[best].value + bars[best + 1].value) best = i;
-    bars.splice(best, 2, { ...bars[best + 1], value: bars[best].value + bars[best + 1].value });
+    bars.splice(best, 2, { ...bars[best + 1], lo: bars[best].lo, value: bars[best].value + bars[best + 1].value,
+      members: mergeMembers(bars[best].members, bars[best + 1].members) });
   }
   return bars;
 }
 
-function histogram(series, p) {
+// Which series a bar is made of (by name), most first: two bars merged add up per name.
+function mergeMembers(a = [], b = []) {
+  const by = new Map();
+  for (const m of [...a, ...b]) by.set(m.name, (by.get(m.name) ?? 0) + m.value);
+  return [...by].map(([name, value]) => ({ name, value })).sort((x, y) => y.value - x.value);
+}
+const MAX_MEMBERS = 8;
+// A bar's members for the screen: the first few, each with its value as words, and how many more there are.
+const showMembers = (members, shown) => ({ members: members.slice(0, MAX_MEMBERS).map(m => ({ name: m.name, display: shown(m.value) })),
+  membersMore: Math.max(0, members.length - MAX_MEMBERS) });
+// A name for each series from the labels that tell them apart (skip: labels that are not the series, such as le).
+const namer = (rows, skip = []) => { const keys = varyingKeys(rows).filter(k => !skip.includes(k)); return r => keys.map(k => r.metric?.[k]).filter(v => v !== undefined).join(' '); };
+
+export function histogram(series, p) {
   if (!series?.length) return { status: 'nodata', display: '—' };
   const secs = seconds(p.query);
   if (series.some(s => s.metric?.le !== undefined)) {
     // Sum by le, in case the query kept other labels.
-    const byLe = new Map();
+    // When the query kept other labels (by service, le), each bar also knows which series it is made of.
+    const byLe = new Map(), nameOf = namer(series, ['le']), byName = new Map();
     for (const s of series) {
       const le = s.metric?.le === '+Inf' ? Infinity : parseFloat(s.metric?.le);
       const v = parseFloat(s.value?.[1]);
-      if (!Number.isNaN(le) && Number.isFinite(v)) byLe.set(le, (byLe.get(le) ?? 0) + v);
+      if (Number.isNaN(le) || !Number.isFinite(v)) continue;
+      byLe.set(le, (byLe.get(le) ?? 0) + v);
+      const n = nameOf(s);
+      if (n) { if (!byName.has(n)) byName.set(n, new Map()); byName.get(n).set(le, (byName.get(n).get(le) ?? 0) + v); }
     }
     const cum = [...byLe].sort((a, b) => a[0] - b[0]);
     const total = cum.at(-1)?.[1] ?? 0;
+    const membersAt = i => [...byName].map(([name, m]) => ({ name, value: (m.get(cum[i][0]) ?? 0) - (i ? m.get(cum[i - 1][0]) ?? 0 : 0) }))
+      .filter(m => m.value > total * 1e-9).sort((a, b) => b.value - a.value);
     // Differences of cumulative rates carry float noise (1e-13): treat that as empty.
-    let bars = cum.map(([le, c], i) => ({ le, value: c - (i ? cum[i - 1][1] : 0) }))
+    let bars = cum.map(([le, c], i) => ({ le, lo: i ? cum[i - 1][0] : 0, value: c - (i ? cum[i - 1][1] : 0), members: membersAt(i) }))
       .map(b => ({ ...b, value: b.value > total * 1e-9 ? b.value : 0 }));
     // Trim empty buckets at either end, so the shape fills the panel.
     const first = bars.findIndex(b => b.value > 0), last = bars.findLastIndex(b => b.value > 0);
     if (first < 0) return { status: 'ok', display: '0', value: 0, buckets: [], total: 0 };
     bars = merge(bars.slice(first, last + 1));
-    const buckets = bars.map(b => ({
-      label: Number.isFinite(b.le) ? `≤${bound(b.le, secs, p.unit)}` : `>${bound(cum.at(-2)?.[0], secs, p.unit)}`,
-      value: b.value,
-    }));
     const p50 = quantile(.5, cum), p95 = quantile(.95, cum);
     const show = v => secs ? bound(v, true) : fmt(v, p.unit);
+    const buckets = bars.map(b => ({
+      label: Number.isFinite(b.le) ? `≤${bound(b.le, secs, p.unit)}` : `>${bound(cum.at(-2)?.[0], secs, p.unit)}`,
+      range: `${bound(b.lo, secs, p.unit)} – ${Number.isFinite(b.le) ? bound(b.le, secs, p.unit) : '∞'}`,
+      value: b.value, word: 'per second',
+      ...showMembers(b.members, v => `${+(100 * v / (b.value || 1)).toPrecision(2)}% of this bar`),
+    }));
     return {
       buckets, total: cum.at(-1)[1], p50: show(p50), p95: show(p95),
       value: p95, display: show(p95), status: status(p95, p), stat: 'P95',
     };
   }
   // Plain series (e.g. memory per pod): equal-width bins across the observed range.
-  const vals = series.map(s => parseFloat(s.value?.[1])).filter(Number.isFinite);
+  // Each bar knows its series by name, so the card can say which services sit where, and which one is the max.
+  const nameOf = namer(series);
+  const named = series.map(s => ({ name: nameOf(s), value: parseFloat(s.value?.[1]) })).filter(x => Number.isFinite(x.value));
+  const vals = named.map(x => x.value);
   if (!vals.length) return { status: 'nodata', display: '—' };
   const lo = Math.min(...vals), hi = Math.max(...vals), n = Math.min(8, Math.max(1, vals.length)), width = (hi - lo) / n || 1;
-  const counts = Array(n).fill(0);
-  for (const v of vals) counts[Math.min(n - 1, Math.floor((v - lo) / width))]++;
-  const buckets = counts.map((value, i) => ({ label: `≤${fmt(lo + width * (i + 1), p.unit)}`, value }));
+  const bins = Array.from({ length: n }, () => []);
+  for (const x of named) bins[Math.min(n - 1, Math.floor((x.value - lo) / width))].push(x);
+  const buckets = bins.map((list, i) => ({ label: `≤${fmt(lo + width * (i + 1), p.unit)}`, range: `${fmt(lo + width * i, p.unit)} – ${fmt(lo + width * (i + 1), p.unit)}`,
+    value: list.length, word: 'series',
+    ...showMembers(list.filter(x => x.name).sort((a, b) => b.value - a.value), v => fmt(v, p.unit)) }));
+  const top = named.reduce((a, b) => (b.value > a.value ? b : a));
   return {
-    buckets, total: vals.length, value: hi, display: fmt(hi, p.unit), status: status(hi, p), stat: 'MAX',
+    buckets, total: vals.length, value: hi, display: fmt(hi, p.unit), status: status(hi, p), stat: 'MAX', maxLabel: top.name || null,
     p50: fmt(vals.sort((a, b) => a - b)[Math.floor(vals.length / 2)], p.unit),
   };
 }
@@ -267,22 +336,50 @@ const seriesLabel = (m = {}, key) => (key && m[key]) ??
 const RANK = { nodata: 0, ok: 1, warn: 2, crit: 3 };
 const worse = (a, b) => (RANK[b] > RANK[a] ? b : a);
 
-// Range query → [{ label, points: [[ms, value]] }], busiest (latest value) first.
+// Labels that tell rows apart: with no listLabel (or one the series lack), only the label values that differ between
+// the rows shown, so "streaming-prod-cluster checkout" and "streaming-prod-cluster cart" read "checkout" and "cart".
+function distinctLabels(rows, listLabel) {
+  if (listLabel && rows.every(r => r.metric?.[listLabel] !== undefined)) return rows;
+  const keys = [...new Set(rows.flatMap(r => Object.keys(r.metric ?? {})))].filter(k => k !== '__name__');
+  const varying = varyingKeys(rows);
+  if (!varying.length || rows.length < 2) return rows;
+  return rows.map(r => ({ ...r, label: varying.map(k => r.metric?.[k]).filter(v => v !== undefined).join(' ') || r.label }));
+}
+// The label keys whose values differ between rows, the most telling first (most distinct values: the deployment before
+// the cluster it runs in), so a label cut short still tells rows apart.
+function varyingKeys(rows) {
+  const keys = [...new Set(rows.flatMap(r => Object.keys(r.metric ?? {})))].filter(k => k !== '__name__');
+  return keys.map(k => [k, new Set(rows.map(r => r.metric?.[k])).size]).filter(([, n]) => n > 1).sort((a, b) => b[1] - a[1]).map(([k]) => k);
+}
+// Which rows to keep when there are too many: the unhealthy first (a target that is down, at 0, must never be the one
+// cut), then the highest. limited.more: how many were left out, for the card to say.
+function keepWorst(rows, limit, health, value) {
+  const sorted = [...rows].sort((a, b) => RANK[health(b)] - RANK[health(a)] || value(b) - value(a));
+  const kept = sorted.slice(0, limit);
+  kept.more = Math.max(0, rows.length - kept.length);
+  return kept;
+}
+
+// Range query → [{ label, points: [[ms, value]] }], the unhealthy and busiest (latest value) first. .more: rows cut.
 async function rangeSeries(p, minutes, limit = MAX_ROWS) {
   const r = await prom(p.query, true, minutes);
-  return (r ?? []).map(s => ({
+  const all = (r ?? []).map(s => ({
     label: seriesLabel(s.metric, p.listLabel),
     metric: s.metric ?? {},
     points: (s.values ?? []).map(([t, v]) => [Math.round(t * 1000), +parseFloat(v).toPrecision(4)]).filter(([, v]) => Number.isFinite(v)),
-  })).filter(s => s.points.length).sort((a, b) => b.points.at(-1)[1] - a.points.at(-1)[1]).slice(0, limit);
+  })).filter(s => s.points.length);
+  const last = s => s.points.at(-1)[1];
+  const kept = keepWorst(all, limit, s => (p.states?.length ? stateOf(last(s), p).status : status(last(s), p)), last);
+  return Object.assign(distinctLabels(kept, p.listLabel), { more: kept.more });
 }
 
-// Instant query → rows, busiest first, each with its own health.
+// Instant query → rows, the unhealthy and busiest first, each with its own health. .more: rows cut.
 async function instantRows(p) {
   const r = await prom(p.query);
-  return (r ?? []).map(s => ({ metric: s.metric ?? {}, value: parseFloat(s.value?.[1]) }))
-    .filter(x => Number.isFinite(x.value)).sort((a, b) => b.value - a.value).slice(0, MAX_ROWS)
+  const all = (r ?? []).map(s => ({ metric: s.metric ?? {}, value: parseFloat(s.value?.[1]) })).filter(x => Number.isFinite(x.value));
+  const kept = keepWorst(all, MAX_ROWS, x => status(x.value, p), x => x.value)
     .map(x => ({ ...x, label: seriesLabel(x.metric, p.listLabel), display: fmt(x.value, p.unit), status: status(x.value, p) }));
+  return Object.assign(distinctLabels(kept, p.listLabel), { more: Math.max(0, all.length - kept.length) });
 }
 
 // State of one sample: the named state the 9000 gave for that value, else the thresholds.
@@ -303,24 +400,30 @@ async function readMulti(out, p, spec) {
     const head = lines[0].points.at(-1)[1];
     return { ...out, window: minutes, warn: p.warn, crit: p.crit, since: p.since ? Date.parse(p.since) || null : null, marks: await marksFor(p.query, minutes, lines[0].points, p),
       graph: lines.map(({ label, points }) => ({ label, points, display: fmt(points.at(-1)[1], p.unit) })),
-      value: head, display: fmt(head, p.unit), status: lines.reduce((st, l) => worse(st, status(l.points.at(-1)[1], p)), 'ok') };
+      value: head, display: fmt(head, p.unit), status: lines.reduce((st, l) => worse(st, status(l.points.at(-1)[1], p)), 'ok'), more: lines.more };
   }
 
   if (out.kind === 'state') {   // state timeline: one band per series, coloured by state over time
     const rows = await rangeSeries(p, minutes, 6);
     if (!rows.length) return none;
     const start = Math.min(...rows.map(r => r.points[0][0])), end = Math.max(...rows.map(r => r.points.at(-1)[0]));
+    const gaps = rows.flatMap(r => r.points.slice(1).map(([t], i) => t - r.points[i][0])).filter(x => x > 0);
+    const step = gaps.length ? Math.min(...gaps) : 60_000;
     const bands = rows.map(r => {
-      const segs = [];   // runs of the same state: { from, to, name, status }
-      for (const [t, v] of r.points) {
-        const s = stateOf(v, p), last = segs.at(-1);
-        if (last && last.name === s.name) last.to = t; else segs.push({ from: t, to: t, ...s });
-      }
-      return { label: r.label, segs, now: segs.at(-1) };
+      // Runs of the same state: { from, to, name, status }. A run lasts one step past its last sample and no further: a
+      // gap in the samples stays empty, and a series that stopped reporting is not drawn (or counted) as still in its
+      // last state.
+      const segs = [];
+      r.points.forEach(([t, v], i) => {
+        const s = stateOf(v, p), last = segs.at(-1), joined = i && t - r.points[i - 1][0] <= step * 1.5;
+        if (last && joined && last.name === s.name) last.to = t + step; else segs.push({ from: t, to: t + step, ...s });
+      });
+      const gone = r.points.at(-1)[0] < end - step * 1.5;
+      return { label: r.label, segs, now: gone ? { name: 'NO DATA', status: 'nodata' } : segs.at(-1) };
     });
     const worst = bands.reduce((a, b) => (RANK[b.now.status] > RANK[a.now.status] ? b : a));
-    return { ...out, window: minutes, start, end, bands, display: worst.now.name, status: worst.now.status,
-      value: bands.filter(b => b.now.status !== 'ok').length };
+    return { ...out, window: minutes, start, end: end + step, bands, display: worst.now.name, status: worst.now.status,
+      value: bands.filter(b => b.now.status !== 'ok').length, more: rows.more };
   }
 
   if (out.kind === 'heatmap') {   // distribution over time: the buckets of a Prometheus histogram, or one row per series
@@ -340,11 +443,14 @@ async function readMulti(out, p, spec) {
       }
       const les = [...byLe.keys()].sort((a, b) => a - b);
       const times = [...new Set(les.flatMap(le => [...byLe.get(le).keys()]))].sort((a, b) => a - b);
+      // A moment where any bucket has no sample can't be differenced (its count would land in the next bucket up): it
+      // stays empty, as "no data".
+      const whole = times.map(t => les.every(le => byLe.get(le).has(t)));
       const cum = les.map(le => times.map(t => byLe.get(le).get(t) ?? 0));
       const top = Math.max(...cum.at(-1), 0);
       rows = les.map((le, i) => ({
         le, label: Number.isFinite(le) ? `≤${bound(le, secs, p.unit)}` : `>${bound(les.at(-2), secs, p.unit)}`,
-        cells: times.map((_, j) => { const d = cum[i][j] - (i ? cum[i - 1][j] : 0); return d > top * 1e-9 ? d : 0; }),
+        cells: times.map((_, j) => { if (!whole[j]) return null; const d = cum[i][j] - (i ? cum[i - 1][j] : 0); return d > top * 1e-9 ? d : 0; }),
       }));
       const used = i => rows[i].cells.some(v => v > 0);
       const first = rows.findIndex((_, i) => used(i)), last = rows.findLastIndex((_, i) => used(i));
@@ -354,19 +460,23 @@ async function readMulti(out, p, spec) {
         const sum = r => r.cells.reduce((a, b) => a + b, 0);
         let best = 0;
         for (let i = 1; i < rows.length - 1; i++) if (sum(rows[i]) + sum(rows[i + 1]) < sum(rows[best]) + sum(rows[best + 1])) best = i;
-        rows.splice(best, 2, { ...rows[best + 1], cells: rows[best].cells.map((v, j) => v + rows[best + 1].cells[j]) });
+        rows.splice(best, 2, { ...rows[best + 1], cells: rows[best].cells.map((v, j) => (v === null ? null : v + rows[best + 1].cells[j])) });
       }
       // Headline: p95 now, from the latest step.
       const lastCum = les.map((le, i) => [le, cum[i].at(-1)]);
       const p95 = quantile(.95, lastCum), show = v => secs ? bound(v, true) : fmt(v, p.unit);
-      return { ...out, window: minutes, rows: rows.map(({ label, cells }) => ({ label, cells: cells.map(v => +v.toPrecision(3)) })), lowFirst: true,
+      // times and cellUnit: for the hover, which names the cell's moment and what its number is (a bucket's share of the rate).
+      return { ...out, window: minutes, rows: rows.map(({ label, cells }) => ({ label, cells: cells.map(v => (v === null ? null : +v.toPrecision(3))) })), lowFirst: true,
+        times: times.map(t => Math.round(t * 1000)), cellUnit: /\b(i?rate)\s*\(/.test(p.query) ? '/s' : '', cellWord: 'in this bucket',
         value: p95, display: show(p95), stat: 'P95', status: status(p95, p) };
     }
     const series = await rangeSeries(p, minutes, 10);
-    const n = Math.max(...series.map(s => s.points.length));
-    rows = series.map(s => ({ label: s.label, cells: Array.from({ length: n }, (_, j) => s.points[j - (n - s.points.length)]?.[1] ?? 0) }));
+    if (!series.length) return none;
+    // Cells line up on the longest series' timestamps; a series with no sample at a moment has an empty (null) cell.
+    const longest = series.reduce((a, b) => (b.points.length > a.points.length ? b : a)), times = longest.points.map(([t]) => t);
+    rows = series.map(s => { const at = new Map(s.points); return { label: s.label, cells: times.map(t => at.get(t) ?? null) }; });
     const head = series[0].points.at(-1)[1];
-    return { ...out, window: minutes, rows, value: head, display: fmt(head, p.unit), stat: 'MAX', status: status(head, p) };
+    return { ...out, window: minutes, rows, times, cellUnit: p.unit ?? '', value: head, display: fmt(head, p.unit), stat: 'MAX', status: status(head, p), more: series.more };
   }
 
   const rows = await instantRows(p);
@@ -374,17 +484,19 @@ async function readMulti(out, p, spec) {
   const head = rows[0];
 
   if (out.kind === 'table') {   // label columns plus the value, worst first
-    const columns = (p.columns?.length ? p.columns : [p.listLabel ?? Object.keys(head.metric).find(k => k !== '__name__') ?? 'series']).slice(0, 3);
+    // No columns given: the labels that tell the rows apart (one column of a label every row shares would show identical rows).
+    const columns = (p.columns?.length ? p.columns : p.listLabel ? [p.listLabel] : varyingKeys(rows).length ? varyingKeys(rows) : [Object.keys(head.metric).find(k => k !== '__name__') ?? 'series']).slice(0, 3);
     return { ...out, columns: [...columns, out.unit || 'value'],
       rows: rows.map(r => ({ cells: columns.map(c => String(r.metric[c] ?? '—')), display: r.display, status: r.status })),
-      value: head.value, display: fmt(head.value, p.unit), status: head.status };
+      value: head.value, display: fmt(head.value, p.unit), status: head.status, more: rows.more };
   }
 
   // bargauge: one gauge per series, filled against a scale, with threshold marks.
-  const max = p.max ?? (Math.max(head.value, p.crit ?? 0, p.warn ?? 0) * 1.1 || 1);
+  // rows come unhealthiest first, so the scale reads the largest of them, not the first.
+  const max = p.max ?? (Math.max(...rows.map(r => r.value), p.crit ?? 0, p.warn ?? 0) * 1.1 || 1);
   return { ...out, max, warn: p.warn, crit: p.crit,
     items: rows.map(({ label, value, display, status }) => ({ label, value, display, status })),
-    value: head.value, display: head.display, status: head.status };
+    value: head.value, display: head.display, status: head.status, more: rows.more };
 }
 
 // ---- flow: a data-flow diagram of the system ---------------------------------------------------------------
@@ -473,14 +585,15 @@ async function readFlow(out, p) {
       for (const e of all) for (const [a, b] of [[e.from, e.to], [e.to, e.from]])
         if (a === n && !keep.has(b) && keep.size < MAX_NODES) { keep.add(b); queue.push([b, hops + 1]); }
     }
+    const every = all;   // node totals count every caller, also those not drawn
     all = all.filter(e => keep.has(e.from) && keep.has(e.to));
     edges = all.map(e => {
       const pct = e.rps > 0 ? (100 * e.failed) / e.rps : e.failed > 0 ? 100 : 0;
       return { from: e.from, to: e.to, value: e.rps, err: pct, display: `${fmt(e.rps)}/s`, errDisplay: pct > 0 ? fmt(pct, '%') : '', status: errStatus(pct) };
     });
     nodes = [...keep].map(id => {
-      const inbound = edges.filter(e => e.to === id), rps = inbound.reduce((a, e) => a + e.value, 0);
-      const bad = all.filter(e => e.to === id).reduce((a, e) => a + e.failed, 0), pct = rps > 0 ? (100 * bad) / rps : 0;
+      const inbound = every.filter(e => e.to === id), rps = inbound.reduce((a, e) => a + e.rps, 0);
+      const bad = inbound.reduce((a, e) => a + e.failed, 0), pct = rps > 0 ? (100 * bad) / rps : 0;
       return { id, label: id, value: rps, err: pct, display: inbound.length ? `${fmt(rps)}/s` : '', errDisplay: pct > 0 ? fmt(pct, '%') : '',
         status: errStatus(pct) };
     });
@@ -561,7 +674,16 @@ const EVENT_SOURCES = {
   },
 };
 
+// Every panel carries the view behind it (spec 2.0, docs/CANVAS.md): the description a canvas opens and edits. The
+// readers below take the v1 spec, so a v2 view is lowered first; the monitors ignore the view until the canvas.
 async function readPanel(p, spec = {}) {
+  const panel = p?.v === VIEW ? toPanel(p) : p;
+  const out = await readSpec(panel, spec);
+  try { out.view = p?.v === VIEW ? p : (p.view ?? toView(panel)); } catch { /* a spec too odd to describe: no view */ }
+  return out;
+}
+
+async function readSpec(p, spec = {}) {
   const out = { code: p.code, title: p.title, unit: p.unit ?? '', kind: p.kind ?? 'stat' };
   // Panels without a query: the 9000 wrote their content (a headline, a next step, a timeline).
   if (p.insight) out.insight = p.insight;   // situation board: why this panel is on screen
@@ -579,6 +701,7 @@ async function readPanel(p, spec = {}) {
     return { ...out, lines, value: lines.length, display: lines.length ? `${lines.length}+` : '0', status: p.status ?? (lines.length ? 'warn' : 'ok') };
   }
   if (out.kind === 'flow') return readFlow(out, p);
+  if (out.kind === 'nodes') { const m = await nodeMap.read(prom, p); return m ? { ...out, ...m } : { ...out, status: 'nodata', display: '—' }; }
   if (out.kind === 'trace') return readTrace(out, p);
   if (out.kind === 'aiden') return readAiden(out, p);
   if (out.kind === 'plan') return readPlan(out, p);
@@ -587,23 +710,30 @@ async function readPanel(p, spec = {}) {
   if (['graph', 'state', 'heatmap', 'table', 'bargauge'].includes(out.kind)) return readMulti(out, p, spec);
   if (out.kind === 'histogram') return { ...out, ...histogram(await prom(p.query), p) };
   const now = await prom(p.query);
-  const value = now?.[0]?.value ? parseFloat(now[0].value[1]) : NaN;
-  Object.assign(out, { value, display: fmt(value, p.unit), status: status(value, p) });
+  // A query that returns several series (one per pod, say): the number, its health, the trend and yesterday all follow
+  // the worst one (the highest now), never whichever Prometheus listed first, and the headline says it is one of many.
+  const live = (now ?? []).map(s => ({ metric: s.metric ?? {}, v: parseFloat(s.value?.[1]) })).filter(s => Number.isFinite(s.v));
+  const worst = live.reduce((a, b) => (b.v > a.v ? b : a), live[0]);
+  const value = worst ? worst.v : NaN;
+  Object.assign(out, { value, display: fmt(value, p.unit), status: status(value, p), ...(live.length > 1 && out.kind !== 'list' && { stat: `MAX OF ${live.length}` }) });
   if (out.kind === 'timeseries') {
     const minutes = p.window ?? spec.window ?? 30;
-    const [r, yd] = await Promise.all([prom(p.query, true, minutes), yesterday(p.query, minutes)]);
-    const points = (r?.[0]?.values ?? []).map(([t, v]) => [t * 1000, parseFloat(v)]).filter(([, v]) => Number.isFinite(v));
+    const follow = live.length > 1 ? worst.metric : undefined;
+    const [r, yd] = await Promise.all([prom(p.query, true, minutes), yesterday(p.query, minutes, follow)]);
+    const points = (pick(r, follow)?.values ?? []).map(([t, v]) => [Math.round(t * 1000), parseFloat(v)]).filter(([, v]) => Number.isFinite(v));
+    // points: [[ms, value]], so the monitors place each sample at its time and break the line across a gap.
     out.series = points.map(([, v]) => v);
+    out.points = points;
     const marks = await marksFor(p.query, minutes, points, p);
     Object.assign(out, { window: minutes, warn: p.warn, crit: p.crit, since: p.since ? Date.parse(p.since) || null : null, yesterday: yd, marks });
   }
   if (out.kind === 'list') {
     const r = p.listQuery ? await prom(p.listQuery) : now;
-    out.items = (r ?? []).map(s => ({
-      label: s.metric?.[p.listLabel] ?? Object.values(s.metric ?? {}).join(' ') ?? '',
-      value: parseFloat(s.value?.[1]),
-    })).filter(i => Number.isFinite(i.value)).sort((a, b) => b.value - a.value).slice(0, 6)
-      .map(i => ({ ...i, display: fmt(i.value, p.unit) }));
+    const all = (r ?? []).map(s => ({ metric: s.metric ?? {}, label: seriesLabel(s.metric, p.listLabel), value: parseFloat(s.value?.[1]) }))
+      .filter(i => Number.isFinite(i.value));
+    const kept = keepWorst(all, 6, i => status(i.value, p), i => i.value);
+    out.items = distinctLabels(kept, p.listLabel).map(({ label, value }) => ({ label, value, display: fmt(value, p.unit) }));
+    out.more = kept.more;
     // A list built from the panel's own query (one series per service, say): headline and health come from
     // the worst series, not whichever happened to come first.
     if (!p.listQuery && out.items.length) {
@@ -743,6 +873,18 @@ function remember(room, spec) {
 export const views = room => (recent.get(room) ?? []).map(({ id, title, story }) => ({ id, title, kind: story ? 'story' : 'board' }));
 export const activeId = room => active.get(room)?.id ?? null;
 
+// Kept across a restart (resume/, via the server): each ship's recent views and which one its screens show.
+export const kept = () => Object.fromEntries([...recent].map(([room, list]) => [room, { views: list.slice(0, 4), active: active.get(room)?.id ?? null }]));
+// Take them back, and put the board that was up on the screens again (live). sendFor(room) -> send.
+export async function bringBack(data, sendFor) {
+  for (const [room, { views: list = [], active: id = null } = {}] of Object.entries(data ?? {})) {
+    recent.set(room, list);
+    for (const v of list) nextViewId = Math.max(nextViewId, Number(String(v.id).slice(1)) + 1 || nextViewId);
+    const v = id && list.find(x => x.id === id);
+    if (v) await start(room, v.spec, sendFor(room), v.id).catch(err => console.error(`Boards: ${room} not brought back: ${err.message}`));
+  }
+}
+
 // Bring a remembered board back (live again). Returns false if it's no longer remembered.
 export async function reopen(room, id, send) {
   const v = (recent.get(room) ?? []).find(x => x.id === id);
@@ -754,7 +896,13 @@ export async function reopen(room, id, send) {
 // Ad-hoc panels: keep only those whose query returns data now.
 async function validate(panels) {
   const kept = [], dropped = [], seen = new Set();
-  for (const p of panels.slice(0, MAX_PANELS)) {
+  for (let p of panels.slice(0, MAX_PANELS)) {
+    // A v2 view (spec 2.0) is checked, then validated as the spec it lowers to; its history goes with it.
+    if (p?.v === VIEW) {
+      const errs = checkView(p);
+      if (errs.length) { dropped.push(`${p.code ?? '?'} (${errs[0]})`); continue; }
+      p = { ...toPanel(p), givenView: p };
+    }
     let code = String(p.code ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 3);
     // No code given: make one from the title's initials ("Checkout to ledger flow" → CTL), else its first letters.
     if (code.length < 2) {
@@ -785,11 +933,21 @@ async function validate(panels) {
       if (!id) { dropped.push(code); continue; }
       seen.add(code); kept.push({ ...p, code, kind, traceId: id }); continue;
     }
-    if (kind === 'note' ? !p.text : kind === 'events' ? !p.events?.length : kind === 'flow' ? false : !p.query) { dropped.push(code); continue; }
+    if (kind === 'note' ? !p.text : kind === 'events' ? !p.events?.length : ['flow', 'nodes'].includes(kind) ? false : !p.query) { dropped.push(code); continue; }
     if (kind === 'logs') { if (!(await loki(p.query, 1))) { dropped.push(code); continue; } }
-    else if (!['note', 'events', 'flow'].includes(kind) && !(await prom(p.query))?.length) { dropped.push(code); continue; }
+    else if (!['note', 'events', 'flow', 'nodes'].includes(kind) && !(await prom(p.query))?.length) { dropped.push(code); continue; }
     seen.add(code);
     kept.push({ ...p, code, kind });
+  }
+  // Each kept panel carries its view: the one it came as (with its history), re-described if validation dropped a layer.
+  for (const k of kept) {
+    const given = k.givenView;
+    delete k.givenView;
+    try {
+      const now = toView(k);
+      k.view = given && (given.layers ?? []).length === now.layers.length ? { ...given, code: k.code, kind: k.kind }
+        : { ...now, ...(given && { history: given.history ?? [], redo: given.redo ?? [] }) };
+    } catch { /* a spec too odd to describe: no view */ }
   }
   return { kept, dropped };
 }
@@ -798,6 +956,7 @@ async function validate(panels) {
 // One panel in words: code, title, headline value, health and the detail behind it.
 function panelLine(p) {
   const items = p.items?.length ? ` (${p.items.map(i => `${i.label} ${i.display}`).join(', ')})`
+    : p.kind === 'nodes' ? ` (${nodeMap.describe(p)})`
     : p.nodes?.length ? ` (${[...p.nodes.filter(n => n.status !== 'ok').map(n => `${n.label} ${n.errDisplay || n.display} ${n.status}`),
         ...p.edges.filter(e => e.status !== 'ok').map(e => `${p.nodes.find(n => n.id === e.from)?.label ?? e.from}→${p.nodes.find(n => n.id === e.to)?.label ?? e.to} ${e.errDisplay || e.display} ${e.status}`)].join(', ') || 'no faults'}; showing ${p.nodes.map(n => n.label).join(', ')})`
     : p.kind === 'compose' && p.layout ? describeCompose(p, panelLine)
@@ -844,7 +1003,7 @@ function summary(board, dropped = []) {
 const PANEL_PROPS = {
   code: { type: 'string', description: 'Three capital letters shown on the panel, unique on the board, e.g. ERR, LAT, DBC' },
   title: { type: 'string', description: 'Short panel title' },
-  kind: { type: 'string', enum: KINDS, description: 'compose: a panel you design yourself from layers (see layers, layout); stat: one number; timeseries: number + trend; graph: a detailed trend with up to five series, axes and legend (use listLabel to name series); list: one row per series; bargauge: one gauge per series against a scale with warn/crit marks (set max for a known ceiling such as 100 for %); table: rows of label columns plus the value (set columns); state: a state timeline, one band per series coloured by state over the window (set states for named values, e.g. 1 up / 0 down); heatmap: a distribution over time, the buckets of a Prometheus histogram (sum by (le) (rate(x_bucket[5m]))) or one row per series; flow: a data-flow diagram of the system, services as boxes and calls as arrows with request rate and error %, faults highlighted; live from the trace service graph (set services to centre it, e.g. ["checkout-api"]; with none it centres on the failing part), or draw your own with nodes and edges; trace: one request as a waterfall of its spans (set service, optionally through or failing, or traceId; no query), failing spans lit, critical path marked; histogram: a distribution as bars (a Prometheus histogram such as sum by (le) (rate(x_bucket[5m])), headline p95; or many series binned by value, headline max); logs: matching log lines (query is LogQL); note: a few words of text you write; events: a timeline you write' },
+  kind: { type: 'string', enum: KINDS, description: 'compose: a panel you design yourself from layers (see layers, layout); stat: one number; timeseries: number + trend; graph: a detailed trend with up to five series, axes and legend (use listLabel to name series); list: one row per series; bargauge: one gauge per series against a scale with warn/crit marks (set max for a known ceiling such as 100 for %); table: rows of label columns plus the value (set columns); state: a state timeline, one band per series coloured by state over the window (set states for named values, e.g. 1 up / 0 down); heatmap: a distribution over time, the buckets of a Prometheus histogram (sum by (le) (rate(x_bucket[5m]))) or one row per series; flow: a data-flow diagram of the system, services as boxes and calls as arrows with request rate and error %, faults highlighted; live from the trace service graph (set services to centre it, e.g. ["checkout-api"]; with none it centres on the failing part), or draw your own with nodes and edges; nodes: a map of one cluster\'s Kubernetes nodes, each a box sized by its memory with how full it is, holding a tile per workload running on it (crash loops, pending pods and restarts lit; unscheduled pods in their own box); set cluster (else the cluster in most trouble), no query; warn/crit are the % of a node\'s memory in use (default 85/100); trace: one request as a waterfall of its spans (set service, optionally through or failing, or traceId; no query), failing spans lit, critical path marked; histogram: a distribution as bars (a Prometheus histogram such as sum by (le) (rate(x_bucket[5m])), headline p95; or many series binned by value, headline max); logs: matching log lines (query is LogQL); note: a few words of text you write; events: a timeline you write' },
   query: { type: 'string', description: 'PromQL (every kind except logs, note, events and trace) or LogQL (logs). Not used by note, events or trace.' },
   unit: { type: 'string', description: 'Unit, e.g. %, ms, req/s, pods, conns' },
   warn: { type: 'number', description: 'Value at or above which the panel shows WARNING (drawn as a line on timeseries)' },
@@ -854,7 +1013,7 @@ const PANEL_PROPS = {
     description: 'state: names and health for values, e.g. [{value:1,name:"up",status:"ok"},{value:0,name:"down",status:"crit"}]; without it, warn/crit decide' },
   alert_uid: { type: 'string', description: 'timeline: the alert to tell the story of (its signal and everything that happened around it)' },
   incident: { type: 'string', description: 'timeline: an incident ref, e.g. INC-0007, whose story to tell' },
-  cluster: { type: 'string', description: 'timeline: the cluster whose changes to show, when no alert or incident names it' },
+  cluster: { type: 'string', description: 'timeline: the cluster whose changes to show, when no alert or incident names it; nodes: the cluster to map' },
   service: { type: 'string', description: 'trace: the service whose trace to show (name or part of one)' },
   through: { type: 'string', description: 'trace: only a trace that also visits this service' },
   failing: { type: 'boolean', description: 'trace: a failing trace instead of the slowest' },

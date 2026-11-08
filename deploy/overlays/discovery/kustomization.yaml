@@ -4,7 +4,7 @@ resources:
   - ../../base
 images:
   - name: docker.io/srclosson/hal9000
-    newTag: 0.30.0
+    newTag: 0.32.1
 patches:
   - path: ingress.yaml
 # HAL aboard Discovery One: cluster fe-apps-discovery-one (kubeconfig ~/.kube/config.discovery-one), alongside the
@@ -36,3 +36,7 @@ configMapGenerator:
       - OTEL_SERVICE_NAME=hal9000
       # StackGen Incidents (open incidents by voice, memory for investigations). INCIDENTS_TOKEN is in hal9000-keys.
       - INCIDENTS_URL=https://incidents.stackgen.run
+      # Know-how: runbooks and standing orders, inside StackGen Incidents since 2026-11-03 (KNOWHOW_TOKEN, the kh_
+      # token "HAL 9000", now Know-how only, is in hal9000-keys). Live, these two are set as env on the Deployment.
+      - KNOWHOW_URL=https://incidents.stackgen.run
+      - KNOWHOW_PUBLIC_URL=https://incidents.stackgen.run/knowhow

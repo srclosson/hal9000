@@ -14,6 +14,7 @@
 // The server's raw tools are taken as internal (mcp/index.js), so the model reaches memory only through these two,
 // which add the date, author and labels in the shape Incidents uses, and through the search before every question.
 
+import { PREVIEW, SCRATCH_COLLECTION } from '../preview.js';
 import * as mcp from '../mcp/index.js';
 import * as config from '../config/index.js';
 
@@ -24,6 +25,8 @@ export const available = () => !!names().find;
 export const canStore = () => !!names().store;
 
 const collection = () => (config.get('memory.collection') ? { collection_name: config.get('memory.collection') } : {});
+// A preview (preview.js) remembers into a scratch collection, never the shared one.
+const storeCollection = () => (PREVIEW ? { collection_name: SCRATCH_COLLECTION } : collection());
 const clip = (s, n) => (s.length > n ? s.slice(0, n) + '…' : s);
 const timeout = (ms, p) => Promise.race([p, new Promise(r => setTimeout(() => r(null), ms))]);
 
@@ -58,7 +61,7 @@ export async function store(fact, { kind = 'fact', cluster, service, by } = {}) 
   if (!tool || !fact) return false;
   const metadata = { source: 'hal9000', path: 'stackgen/hal9000', kind, date: new Date().toISOString().slice(0, 10),
     ...(service && { services: [service] }), ...(cluster && { clusters: [cluster] }), ...(by && { by }) };
-  const out = await mcp.call(tool, { information: String(fact).slice(0, 2000), metadata, ...collection() }, { internal: true });
+  const out = await mcp.call(tool, { information: String(fact).slice(0, 2000), metadata, ...storeCollection() }, { internal: true });
   if (/^Error/.test(out)) { console.warn(`Memory: store failed: ${out.slice(0, 160)}`); return false; }
   console.log(`Memory: stored (${kind}) ${String(fact).slice(0, 120)}`);
   return true;

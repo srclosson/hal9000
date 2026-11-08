@@ -1,16 +1,34 @@
 {
   "name": "hal9000",
-  "version": "0.30.0",
+  "version": "0.44.1",
   "private": true,
   "description": "HAL/SAL 9000 PWA: phone as the eye, tablets/computers as monitors, synced over WebSocket",
   "type": "module",
   "scripts": {
-    "start": "node --env-file-if-exists=.env server.js"
+    "start": "node --env-file-if-exists=.env --import ./telemetry/bootstrap.js server.js",
+    "prestart": "npm run build",
+    "build": "node scripts/build-observability.mjs",
+    "test": "node --test",
+    "test:browser": "npm run build && node scripts/smoke-observability.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.134.0",
+    "@grafana/faro-web-sdk": "^2.13.0",
+    "@grafana/faro-web-tracing": "^2.13.0",
     "@modelcontextprotocol/sdk": "^1.32.1",
+    "@opentelemetry/api": "~1.9.1",
+    "@opentelemetry/exporter-trace-otlp-http": "^0.223.0",
+    "@opentelemetry/instrumentation-http": "^0.223.0",
+    "@opentelemetry/instrumentation-undici": "^0.22.0",
+    "@opentelemetry/resources": "~2.12.0",
+    "@opentelemetry/sdk-node": "^0.223.0",
     "qrcode": "^1.5.4",
     "ws": "^8.18.0"
+  },
+  "optionalDependencies": {
+    "@pyroscope/nodejs": "^0.7.1"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2"
   }
 }

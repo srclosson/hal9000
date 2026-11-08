@@ -54,6 +54,7 @@ The 9000 had no mouse, so everything works from the keyboard. Hotkeys pause whil
 | `m` | Open / close the 9000 logo menu | Same |
 | `n` | Open / close the metric browser (drag a metric onto a panel; Esc closes) | Same |
 | `p` | Open / close the plan card (a fix waiting for approval, or the latest) | Same |
+| `y` | Open / close the Ready to try card (a capability request waiting to be tried and shipped) | Same |
 | `f` | Full screen on / off (no browser UI) | Full screen on / off |
 | `[` / `]` | Previous / next view (situation, ship systems, recent boards and stories) | Same |
 | `v` | Open / close the view picker | — |
@@ -168,6 +169,16 @@ tools only read, which can change things directly, which only through an approve
 switched off. A tool only reads when its server marks it read-only or its name says so (`list_`, `get_`, `search_`…;
 many servers mark nothing, and Aiden marks every tool destructive). The paragraph overrides anything a hint, memory or
 earlier conversation says about access, so hints should describe how to use a server, never what it may do.
+
+**Slow tools are held, not timed out** (`held/index.js`). Another agent can take minutes to answer. The model's MCP
+calls wait in the conversation for `tools.holdSeconds` (20 s); a call still working then is held: the model is told it
+is waiting (and not to call it again), the turn ends, and the answer comes back later as an `[Automatic: held call …]`
+turn in the room that asked. Slow is told apart from gone: the server must keep answering an MCP ping (every 30 s;
+three misses and the call is lost), progress notifications reset the quiet clock, and a call that is alive but silent
+for twice the longest it usually takes (learned per tool; `tools.quietMinutes` until then) is said to be quiet, once.
+Nothing is given up before `tools.maxWaitMinutes`. The monitors show what the 9000 is waiting on; `waiting_on` lists or
+cancels held calls. A call that timed out or was cancelled is never sent again (a changing tool is retried only when
+the server said it had lost the session).
 
 ## Situation board (the home screen)
 When Grafana is connected, the monitors' home screen is no longer the fixed COM…MEM: it's the **situation board**,
@@ -285,6 +296,65 @@ server's `list_prometheus_label_values`.)
 yesterday on the VIT panel"); on the situation board, the board becomes the ship's own with that panel replaced.
 Naming a panel's code in a question makes it the panel the question is about, with its queries. `show_panels` and
 `show_story` take `compose` panels too.
+
+## Capability requests: build, try, then ship
+When a question can't be answered because something doesn't exist (a service sends no traces, a metric is missing,
+the monitors can't draw what's needed), the 9000 says so and offers to have it built. He never approves, merges or
+deploys his own work: two gates, each held by a signed-in person.
+
+**Gate 1, "may I build it?"** A plan (the usual plan card) whose first step is the built-in `aiden_request_change`
+{ repository, kind (instrumentation, panel, feature), title, need, reason, change }, followed by steps telling the
+owners a request is in progress (team chat, issue: "Ask first" tools). Approving only lets Aiden work: the workflow
+named in Settings → Capabilities (default `capability-request`) makes the change on a branch and opens a pull request.
+A run still going is followed through its Aiden session; one waiting for an approval in Guild is reported.
+
+**Gate 2, "ship what you tried?"** A deployer outside the 9000 builds the branch and puts up a preview, then records it
+here (address, exact image digest, eval scores against production). Every ship's monitor then shows the **Ready to
+try** card (key `y`): what was missing, the change, the build, evals (and anything that regressed), who has tried it.
+**Try it** goes through `/try/<id>`, which records who opened which build. Then:
+- **Ship what I tried** (two clicks, only for someone who tried this build) pins its digest; the deployer can report
+  only that digest as shipped, anything else is refused and announced.
+- **Send feedback** goes to Aiden on the same session and pull request; the old preview is torn down and a new one
+  built when the branch updates.
+- **Reject** asks Aiden to close the pull request; the preview is torn down. Untried previews expire after
+  `capabilities.trialHours` (default 72) and are torn down.
+
+Sandboxes, by kind (the record's `sandbox`, for the deployer): `preview_app` (a preview 9000 at its own address, run
+with `HAL_PREVIEW=1`), `preview_service` (a preview copy of the service in its own namespace, telemetry tagged
+`deployment.environment=preview`); `in_place` (a view preset tried on the requester's monitor) comes with the canvas.
+Branch code is never loaded into the normal monitor, which carries the person's sign-in.
+
+Requests are kept in StackGen Incidents (scope `hal9000-capabilities`) so a trial survives restarts (only from inside
+the cluster; `CAPABILITIES_TEST_FILE` keeps them in a file for local testing).
+
+### The deployer interface
+The 9000 does not build or deploy previews. A deployer (CI with its own scoped credentials) uses the bearer token in
+Settings → Capabilities → Deployer token:
+
+| Call | What it does |
+|---|---|
+| `GET /api/capabilities` | every request with `wants`: `preview` (build the PR's branch), `ship` (merge and roll out exactly `digest`), `teardown` (remove the preview at `url`) |
+| `POST /api/capabilities/<id>/preview` `{ url, digest, evals?: { prod, preview, regressed: [] } }` | the preview is up (https, `sha256:` digest): ready to try |
+| `POST /api/capabilities/<id>/shipped` `{ digest }` | rolled out; refused unless it is the approved digest |
+| `POST /api/capabilities/<id>/torn-down` `{ url? }` | a preview is gone |
+| `POST /api/capabilities/<id>/merged` | the PR merged (when no GitHub token is set here) |
+
+The deployer cannot approve: shipping is decided only on a monitor of the real 9000.
+
+The deployer is `.github/workflows/preview.yml` (here, and the same in srclosson/discovery-one), with
+`.github/preview/hal.mjs` for the calls above. It builds the PR's image, applies `deploy/overlays/preview` pinned to its
+digest in namespace `hal9000-pr-<n>` (`HAL_PREVIEW=1`, at `pr-<n>.9000.stackgen.run`), runs the evals against the
+preview and production (`EVAL_REPORT` names the report), and records the URL, digest and scores on the PR and here;
+closing the PR removes it, and every 30 minutes it removes previews the 9000 no longer wants. Its cluster access is
+`deploy/preview-access/previewers.yaml` (draft): service accounts that can create, use and delete only
+`hal9000-pr-<n>` / `discovery-pr-<n>` namespaces, enforced by a ValidatingAdmissionPolicy. Rolling out what was
+approved (`wants: ship`) is not automated yet.
+
+### Preview mode (`HAL_PREVIEW=1`)
+A preview 9000 sees what the real one sees and changes nothing: only read tools are offered and changing calls are
+refused, no plans (so no requests or approvals), no alert announcements or automatic Aiden investigations, no writes
+to StackGen Incidents (incidents, timelines, settings, request records), memory writes go to a scratch collection
+(`HAL_PREVIEW_COLLECTION`, default `hal9000-preview`). Its monitors show PREVIEW; its capability API answers 503.
 
 ## Alert stories
 Ask "what's going on?" or about a specific alert, and the 9000 investigates before it speaks: the alert's query,
@@ -513,8 +583,11 @@ your systems" and "walk me through your architecture" are answered from live fac
 
 ## The 9000 observing itself
 Every turn is recorded (`telemetry/index.js`): duration, model calls and tokens, each tool call's time and success.
+Full-stack instrumentation also covers HTTP and WebSocket traffic, Node runtime metrics, structured correlated
+logs, distributed traces, optional Pyroscope wall/CPU/allocation profiles, and Faro browser observability.
+See [Observability](docs/OBSERVABILITY.md) for opt-in endpoints, sampling, privacy, collector setup and validation.
 `self_check` answers "are you operational?" / "why were you slow?" from those numbers. Set
-`OTEL_EXPORTER_OTLP_ENDPOINT` to also export a trace per turn (`conversation.turn` with `llm.call` and `tool …` child
+`OTEL_EXPORTER_OTLP_ENDPOINT` to also export a trace per turn (`conversation.turn` with `llm.call` and `tool.call` child
 spans, GenAI token attributes) and metrics every 30 s (`hal9000.turns`, `hal9000.turn.duration`,
 `hal9000.model.calls`, `hal9000.model.tokens`, `hal9000.tool.calls`) as OTLP/HTTP JSON.
 On Civo it exports to `data-recipes-traces-relay` (the collector that feeds the stephgen-medussa ObserveNow instance the

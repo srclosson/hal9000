@@ -1,0 +1,439 @@
+<!doctype html>
+<html lang="en">
+<head>
+<script defer src="/assets/observability.js"></script>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#f6f5f2">
+<title>Dashboard</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icons/icon-sal.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Geist+Mono:wght@500;600&display=swap">
+<style>
+/* The dashboard: a quiet page of panels with a written conversation beside it (the Figma "Ask at the dashboard"
+   mockups). The panels are the 9000's own (displays.js), drawn in this page's palette: the --panel-* tokens below. */
+:root {
+  --bg: #f6f5f2; --card: #ffffff; --line: #e4e2dd; --text: #111418; --text-2: #4b5058; --muted: #8a8f98;
+  --accent: #2f5bea; --accent-soft: #eaf0fe; --crit: #d92d20; --crit-soft: #fdecea; --warn: #b54708; --warn-soft: #fef0c7;
+  --ok: #067647; --ok-soft: #e7f6ec; --bubble: #efeeeb;
+  --sans: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif; --mono: 'Geist Mono', ui-monospace, Menlo, monospace;
+  /* What displays.js draws with (see base.css for the 9000's). */
+  --font-screen: var(--sans); --font-wide: var(--sans); --font-mono: var(--mono);
+  --panel-ink: 17,20,24; --panel-ground: 17,20,24; --panel-veil: 255,255,255; --panel-scrim: 246,245,242; --panel-water: 47,91,234;
+  --panel-alarm: #d92d20; --panel-alarm-soft: #b42318; --panel-amber: #b54708; --panel-ok: #067647; --panel-aiden: #2f5bea;
+  --panel-dark: #ffffff; --panel-chip-ink: #ffffff; --chip-yellow: #b54708;
+  --field-royal: #ffffff; --field-blue: #ffffff; --field-slate: #ffffff; --field-teal: #ffffff; --field-plum: #ffffff; --field-navy: #ffffff;
+  --panel-series: light; --panel-grid: 0;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 14px/1.4 var(--sans); letter-spacing: -.005em; -webkit-font-smoothing: antialiased; }
+button, input { font: inherit; color: inherit; }
+button { cursor: pointer; }
+.app { display: grid; grid-template-columns: minmax(0, 1fr) 420px; height: 100dvh; }
+main { overflow: auto; padding: 32px 40px; display: flex; flex-direction: column; gap: 18px; }
+header.top { display: flex; align-items: center; gap: 10px; min-height: 40px; }
+header.top h1 { margin: 0; font-size: 24px; font-weight: 600; letter-spacing: -.015em; }
+.spacer { flex: 1; }
+.meta { font: 500 11px/1.4 var(--mono); color: var(--muted); text-transform: uppercase; }
+.pill { display: inline-flex; align-items: center; gap: 6px; padding: 3px 8px; border-radius: 999px; font-size: 12px; font-weight: 500; white-space: nowrap; }
+.pill::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.pill.crit { background: var(--crit-soft); color: var(--crit); }
+.pill.warn { background: var(--warn-soft); color: var(--warn); }
+.pill.ok { background: var(--ok-soft); color: var(--ok); }
+.pill.nodata { background: var(--bubble); color: var(--text-2); }
+.select { border: 1px solid var(--line); background: var(--card); border-radius: 8px; padding: 6px 10px; font-size: 13px; color: var(--text-2); }
+.alarm { display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-radius: 12px; background: var(--crit-soft); color: var(--crit); font-weight: 500; }
+.alarm[hidden] { display: none; }
+.alarm button { margin-left: auto; border: 1px solid currentColor; background: none; border-radius: 8px; padding: 4px 10px; color: inherit; }
+.alarm.acked { background: var(--bubble); color: var(--text-2); }
+.panels { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 16px; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; height: 260px; min-width: 0; }
+.card header { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.card h3 { margin: 0; flex: 1; min-width: 0; font-size: 13.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.card .ask { border: 0; background: none; color: var(--accent); font-size: 12.5px; font-weight: 500; padding: 2px 4px; border-radius: 6px; }
+.card .ask:hover { background: var(--accent-soft); }
+.card canvas { flex: 1; width: 100%; min-height: 0; display: block; }
+.card.focus { border-color: var(--accent); }
+.empty { color: var(--muted); padding: 24px 0; }
+.offline { color: var(--crit); }
+
+aside { background: var(--card); border-left: 1px solid var(--line); display: flex; flex-direction: column; gap: 16px; padding: 24px; min-height: 0; }
+.dock-head { display: flex; align-items: center; gap: 8px; }
+.dock-head b { flex: 1; font-size: 13px; font-weight: 600; }
+.who { position: relative; }
+.who > button { border: 0; background: none; color: var(--muted); font-size: 12px; padding: 2px 6px; border-radius: 6px; }
+.who > button:hover { background: var(--bg); }
+.menu { position: absolute; right: 0; top: 26px; z-index: 5; min-width: 240px; background: var(--card); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 8px 24px rgba(17,20,24,.08); padding: 6px; }
+.menu[hidden] { display: none; }
+.menu h4 { margin: 6px 8px 4px; font: 500 11px/1.4 var(--mono); color: var(--muted); text-transform: uppercase; }
+.menu button, .menu a { display: flex; width: 100%; align-items: baseline; gap: 8px; text-align: left; border: 0; background: none; padding: 7px 8px; border-radius: 8px; color: var(--text); text-decoration: none; font-size: 13px; }
+.menu button:hover, .menu a:hover { background: var(--bg); }
+.menu [aria-checked="true"]::after { content: '✓'; margin-left: auto; color: var(--accent); }
+.menu a { flex-wrap: wrap; }
+.menu small { color: var(--muted); font-size: 11.5px; flex-basis: 100%; order: 2; }
+.thread { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 14px; }
+.msg { display: flex; flex-direction: column; gap: 4px; max-width: 100%; }
+.msg.you { align-items: flex-end; }
+.msg.you .bubble { background: var(--bubble); padding: 10px 14px; border-radius: 12px; max-width: 90%; }
+.msg .by { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: var(--text-2); }
+.msg.computer .by::before { content: ''; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+.msg .by i { font-style: normal; font-weight: 400; color: var(--muted); }
+.msg .bubble p { margin: 0 0 .5em; } .msg .bubble p:last-child { margin: 0; }
+.msg .bubble ul, .msg .bubble ol { margin: .2em 0 .5em; padding-left: 1.3em; }
+.msg code { font: 500 12.5px var(--mono); background: var(--bg); padding: 1px 4px; border-radius: 4px; }
+.msg pre { margin: .4em 0; padding: 8px 10px; background: var(--bg); border-radius: 8px; overflow: auto; }
+.msg pre code { background: none; padding: 0; }
+.msg details { margin-top: .4em; color: var(--text-2); white-space: pre-wrap; }
+.msg.pending .bubble { color: var(--muted); }
+.steps { margin: 0; padding-left: 1.2em; color: var(--muted); font-size: 12.5px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { display: inline-flex; border: 1px solid var(--line); background: none; border-radius: 999px; padding: 6px 10px; color: var(--accent); font-size: 12.5px; font-weight: 500; text-decoration: none; }
+.chip:hover { background: var(--accent-soft); }
+.chip[disabled] { color: var(--muted); }
+.rate { display: flex; gap: 6px; }
+.rate button { border: 1px solid var(--line); background: none; border-radius: 999px; padding: 2px 10px; font-size: 12px; color: var(--text-2); }
+.rate button[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
+.rate.done button[aria-pressed="false"] { opacity: .5; }
+.card.steps-card, .msg .card { height: auto; padding: 12px 14px; gap: 6px; background: var(--bg); border: 1px solid var(--line); }
+.msg .card .ctitle { font-weight: 600; font-size: 13px; }
+.msg .card ol { margin: 0; padding-left: 1.2em; display: flex; flex-direction: column; gap: 8px; }
+.msg .card .kind { font: 600 10.5px var(--mono); text-transform: uppercase; color: var(--muted); }
+.msg .card .cmd { display: flex; gap: 6px; align-items: flex-start; }
+.msg .card .cmd pre { flex: 1; margin: 4px 0; background: var(--card); }
+.msg .card .cmd button { border: 1px solid var(--line); background: var(--card); border-radius: 6px; padding: 3px 8px; font-size: 12px; margin-top: 6px; }
+.msg .card .expect { color: var(--text-2); font-size: 12.5px; }
+.msg .card .chip { align-self: flex-start; }
+.plan { border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; background: var(--bg); font-size: 13px; }
+.plan[hidden] { display: none; }
+.plan .ptitle { font-weight: 600; } .plan .ptitle i { font-style: normal; color: var(--muted); font-weight: 400; }
+.plan h4 { margin: 4px 0 0; font: 500 11px/1.4 var(--mono); color: var(--muted); text-transform: uppercase; }
+.plan p { margin: 0; } .plan ol { margin: 0; padding-left: 1.2em; }
+.plan pre { margin: 4px 0; font: 500 11.5px var(--mono); white-space: pre-wrap; background: var(--card); padding: 6px 8px; border-radius: 6px; }
+.plan .warn { color: var(--crit); }
+.plan .acts { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.plan .acts button { border: 1px solid var(--line); background: var(--card); border-radius: 8px; padding: 6px 12px; font-weight: 500; }
+.plan .acts .approve { background: var(--text); color: #fff; border-color: var(--text); }
+.plan .acts .approve.armed { background: var(--crit); border-color: var(--crit); }
+.plan .acts small { color: var(--muted); flex-basis: 100%; }
+form.composer { display: flex; gap: 10px; align-items: center; background: var(--bg); border-radius: 12px; padding: 4px 6px 4px 14px; }
+form.composer input { flex: 1; border: 0; background: none; outline: none; padding: 8px 0; font-size: 14px; }
+form.composer button { border: 0; background: none; color: var(--muted); padding: 6px 8px; border-radius: 8px; }
+form.composer:focus-within { box-shadow: 0 0 0 2px var(--accent-soft); }
+#tip { position: fixed; z-index: 10; pointer-events: none; max-width: 300px; background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; font-size: 12px; box-shadow: 0 8px 24px rgba(17,20,24,.08); }
+#tip[hidden] { display: none; }
+#tip b { display: block; margin-bottom: 4px; }
+#tip div { display: flex; gap: 10px; justify-content: space-between; } #tip i { font: 500 11.5px var(--mono); font-style: normal; }
+#tip p { margin: 4px 0 0; color: var(--text-2); }
+.notice { padding: 8px 12px; border-radius: 10px; background: var(--warn-soft); color: var(--warn); font-size: 13px; }
+.notice[hidden] { display: none; }
+@media (max-width: 900px) {
+  .app { grid-template-columns: 1fr; grid-template-rows: auto minmax(360px, 55dvh); height: auto; min-height: 100dvh; }
+  main { padding: 20px 16px; }
+  aside { border-left: 0; border-top: 1px solid var(--line); padding: 16px; }
+  .panels { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+<div class="app">
+  <main>
+    <header class="top">
+      <h1 id="title">Situation</h1>
+      <span class="pill" id="health" hidden></span>
+      <div class="spacer"></div>
+      <select class="select" id="views" aria-label="View"></select>
+    </header>
+    <div class="notice" id="notice" hidden></div>
+    <div class="alarm" id="alarm" hidden><span id="alarmText"></span><button type="button" id="ack">Acknowledge</button></div>
+    <section class="panels" id="panels"><div class="empty">Connecting…</div></section>
+  </main>
+  <aside>
+    <div class="dock-head">
+      <b id="dockTitle">Ask about this dashboard</b>
+      <div class="who">
+        <button type="button" id="whoBtn" aria-haspopup="menu" aria-expanded="false"></button>
+        <div class="menu" id="whoMenu" role="menu" hidden></div>
+      </div>
+    </div>
+    <div class="plan" id="plan" hidden></div>
+    <div class="thread" id="thread" aria-live="polite"><div class="empty">No conversation yet.</div></div>
+    <form class="composer" id="composer" autocomplete="off">
+      <input id="q" name="q" placeholder="Ask this dashboard anything" maxlength="500" aria-label="Your question">
+      <button type="submit" aria-label="Send">⏎</button>
+    </form>
+  </aside>
+</div>
+<script type="module">
+import { connect, roomFromUrl, newRoomCode, registerSW, personaOf } from '/shared.js';
+import { escapeHtml, mdHtml, cardHtml, copyText } from '/chat.js';
+import { boardPanel, retint } from '/displays.js';
+import { UIS, linkTo } from '/uis.js';
+
+const $ = id => document.getElementById(id);
+const ME = UIS.find(u => u.id === 'dashboard');
+const params = new URLSearchParams(location.search);
+let room = roomFromUrl();
+if (!room) { room = newRoomCode(); params.set('room', room); history.replaceState(null, '', `?${params}`); }
+// A persona picked on this device for this ship is kept; otherwise the first screen in a ship brings this UI's own.
+const PICKED = `persona-picked:${room}`;
+const picked = () => { try { return localStorage.getItem(PICKED); } catch { return null; } };
+retint();   // the panels' palette: this page's tokens (fonts may still be loading; they are read when drawn)
+
+const ship = { state: {}, voice: [] };
+let board = null, cards = [], views = [], chatMsgs = [], firstHello = true;
+const clockOf = at => new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+const who = () => personaOf(ship.state, conn?.server);
+const STATUS_WORD = { crit: 'Critical', warn: 'Warning', ok: 'Healthy', nodata: 'No data' };
+
+const conn = connect({
+  room, role: 'monitor', panel: 0,
+  onState: (s, patch) => {
+    ship.state = s;
+    if ('persona' in patch || 'theme' in patch) renderWho();
+    if ('alarm' in patch) renderAlarm();
+    if ('plan' in patch) renderPlan();
+  },
+  onRoster: (roster, id) => {
+    // Joining (hello): a ship this device hasn't chosen for, with no other screen in it, gets the dashboard's persona.
+    if (!firstHello || !id) return;
+    firstHello = false;
+    const alone = roster.filter(c => c.id !== id).length === 0;
+    if (alone && !picked() && ME.persona && ship.state.persona !== ME.persona) conn.set({ persona: ME.persona });
+    renderWho();
+  },
+  onBoard: b => showBoard(b),
+  onViews: (list, current) => { views = list; renderViews(current); },
+  onChat: msg => (msg.history ? renderChat(msg.history) : addChat(msg.entry)),
+  onActivity: text => chatPending(text),
+  onStatus: st => {
+    $('notice').hidden = st === 'online';
+    $('notice').textContent = st === 'outdated' ? 'This page is older than the server: reload to update it.' : st === 'offline' ? 'Reconnecting…' : '';
+  },
+});
+registerSW();
+
+// ---- who answers, and which screen this is ----
+function renderWho() {
+  const p = who();
+  $('whoBtn').textContent = `${p.name} ▾`;
+  document.title = `Dashboard · ${p.product}`;
+  $('q').placeholder = `Ask ${p.name} about this dashboard`;
+  for (const el of document.querySelectorAll('[data-computer]')) el.textContent = p.name;
+}
+function renderWhoMenu() {
+  const cur = who().id;
+  $('whoMenu').innerHTML = '<h4>Who answers in this ship</h4>' +
+    conn.server.personas.map(p => `<button type="button" role="menuitemradio" aria-checked="${p.id === cur}" data-persona="${escapeHtml(p.id)}">${escapeHtml(p.product)}</button>`).join('') +
+    '<h4>This screen</h4>' +
+    UIS.map(u => `<a role="menuitemradio" aria-checked="${u.id === ME.id}" href="${escapeHtml(linkTo(u.id, room))}">${escapeHtml(u.name)} <small>${escapeHtml(u.about)}</small></a>`).join('') +
+    `<h4>Ship ${escapeHtml(room)}</h4><a role="menuitem" href="/settings?room=${encodeURIComponent(room)}">Settings</a>`;
+  for (const b of $('whoMenu').querySelectorAll('[data-persona]')) b.onclick = () => {
+    try { localStorage.setItem(PICKED, b.dataset.persona); } catch {}
+    conn.set({ persona: b.dataset.persona }); toggleWho(false);
+  };
+}
+function toggleWho(open = $('whoMenu').hidden) {
+  if (open) renderWhoMenu();
+  $('whoMenu').hidden = !open; $('whoBtn').setAttribute('aria-expanded', String(open));
+}
+$('whoBtn').onclick = e => { e.stopPropagation(); toggleWho(); };
+document.addEventListener('click', e => { if (!$('whoMenu').hidden && !$('whoMenu').contains(e.target)) toggleWho(false); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape') toggleWho(false); });
+
+// ---- views and the board ----
+const KIND = { home: 'Situation', systems: 'Systems', board: 'Board', story: 'Story' };
+function renderViews(current) {
+  $('views').innerHTML = views.map(v => `<option value="${escapeHtml(v.id)}"${v.id === current ? ' selected' : ''}>${escapeHtml(v.title ?? KIND[v.kind] ?? v.id)}</option>`).join('');
+  $('views').hidden = views.length < 2;
+}
+$('views').onchange = () => conn.view($('views').value);
+
+function showBoard(b) {
+  const same = board && b && board.panels?.map(p => p.code).join(',') === b.panels?.map(p => p.code).join(',');
+  board = b;
+  $('title').textContent = b?.title || 'Situation';
+  const worst = ['crit', 'warn', 'nodata', 'ok'].find(s => b?.panels?.some(p => p.status === s));
+  $('health').hidden = !worst;
+  $('health').className = `pill ${worst ?? ''}`; $('health').textContent = STATUS_WORD[worst] ?? '';
+  if (same) {
+    b.panels.forEach((p, i) => { cards[i].d.data = p; setStatus(cards[i], p); });
+    return;
+  }
+  $('panels').innerHTML = '';
+  cards = (b?.panels ?? []).map((p, i) => card(p, i));
+  if (!cards.length) $('panels').innerHTML = '<div class="empty">Nothing needs attention right now.</div>';
+}
+function setStatus(c, p) {
+  const pill = c.el.querySelector('.pill');
+  pill.className = `pill ${p.status ?? ''}`; pill.textContent = STATUS_WORD[p.status] ?? ''; pill.hidden = !p.status || p.status === 'ok';
+}
+function card(p, i) {
+  const el = document.createElement('article');
+  el.className = 'card';
+  el.innerHTML = `<header><h3 title="${escapeHtml(p.title)}">${escapeHtml(p.title)}</h3><span class="pill"></span><button class="ask" type="button">Ask</button></header><canvas></canvas>`;
+  const c = { el, d: boardPanel(p, i), canvas: el.querySelector('canvas') };
+  setStatus(c, p);
+  $('panels').append(el);
+  // Hovering a panel tells the assistant which one is being looked at ("why is that so high?").
+  let focusTimer;
+  el.onpointerenter = () => { clearTimeout(focusTimer); focusTimer = setTimeout(() => conn.focus(c.d.code), 300); };
+  el.querySelector('.ask').onclick = () => { $('q').value = `About ${c.d.title}: `; $('q').focus(); $('q').dataset.about = c.d.code; };
+  const cv = c.canvas, inside = (h, x, y) => h && x >= h.x0 && x <= h.x1 && y >= h.y0 && y <= h.y1;
+  cv.onpointermove = e => {
+    const r = cv.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top, d = c.d;
+    d.hoverX = x; d.hoverY = y;
+    const fix = inside(d.fixHit, x, y) ? d.fixHit.fix : null, trunc = (d.truncHits ?? []).find(h => inside(h, x, y));
+    cv.style.cursor = fix ? 'pointer' : '';
+    showTip(fix ? { title: `Suggested fix · ${fix.effort}`, notes: [fix.text, ...(fix.finding ? [fix.finding] : []), 'Click to have it done or explained'] }
+      : trunc ? { title: 'In full', notes: [trunc.full] } : d.tipAt?.(x, y), e.clientX, e.clientY);
+  };
+  cv.onpointerleave = () => { c.d.hoverX = c.d.hoverY = NaN; showTip(null); };
+  cv.onclick = e => {
+    const r = cv.getBoundingClientRect(), d = c.d;
+    if (!inside(d.fixHit, e.clientX - r.left, e.clientY - r.top)) return;
+    const fix = d.fixHit.fix;
+    conn.ask(`Fix: ${d.title} — ${fix.text} (${fix.effort})${fix.runbooks?.length ? ` [runbooks: ${fix.runbooks.map(rb => `${rb.ref} ${rb.title}`).join('; ')}]` : ''}`, d.code);
+  };
+  return c;
+}
+const tipEl = Object.assign(document.createElement('div'), { id: 'tip', hidden: true });
+document.body.append(tipEl);
+function showTip(tip, cx, cy) {
+  if (!tip || (!tip.rows?.length && !tip.notes?.length)) { tipEl.hidden = true; return; }
+  tipEl.innerHTML = `<b>${escapeHtml(tip.title)}</b>` + (tip.rows ?? []).map(r => `<div><span>${escapeHtml(r.label)}</span><i>${escapeHtml(r.value)}</i></div>`).join('') +
+    (tip.notes ?? []).map(n => `<p>${escapeHtml(n)}</p>`).join('');
+  tipEl.hidden = false;
+  const w = tipEl.offsetWidth, h = tipEl.offsetHeight;
+  tipEl.style.left = `${Math.min(innerWidth - w - 8, cx + 16)}px`;
+  tipEl.style.top = `${cy + h + 24 > innerHeight ? cy - h - 12 : cy + 18}px`;
+}
+function frame(t) {
+  const dpr = devicePixelRatio || 1;
+  for (const { d, canvas } of cards) {
+    const w = canvas.clientWidth, h = canvas.clientHeight;
+    if (w < 2 || h < 2) continue;
+    const cw = Math.round(w * dpr), ch = Math.round(h * dpr);
+    if (canvas.width !== cw || canvas.height !== ch) { canvas.width = cw; canvas.height = ch; }
+    const ctx = canvas.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+    d.draw(ctx, w, h, t, ship, { top: 0 });
+  }
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+
+// ---- the alarm ----
+function renderAlarm() {
+  const a = ship.state.alarm;
+  $('alarm').hidden = !a;
+  if (!a) return;
+  $('alarmText').textContent = `Alert: ${a.title}${a.ack ? ` · acknowledged by ${a.ack.by} at ${clockOf(a.ack.at)}` : ''}`;
+  $('alarm').classList.toggle('acked', !!a.ack);
+  $('ack').hidden = !!a.ack;
+}
+$('ack').onclick = () => conn.ack();
+
+// ---- the conversation ----
+const thread = $('thread');
+const atBottom = () => thread.scrollHeight - thread.scrollTop - thread.clientHeight < 40;
+const scrollDown = force => { if (force || atBottom()) thread.scrollTop = thread.scrollHeight; };
+function chatEl(m) {
+  const el = document.createElement('div');
+  el.className = `msg ${m.from}`;
+  const md = m.format === 'markdown';
+  el.innerHTML = (m.from === 'you'
+      ? `<div class="by"><i>${escapeHtml(m.by ?? 'You')} · ${clockOf(m.at)}</i></div>`
+      : `<div class="by"><span data-computer>${escapeHtml(who().name)}</span>${m.via ? `<i>from ${escapeHtml(m.via)}</i>` : ''}<i>${clockOf(m.at)}</i></div>`) +
+    (m.steps?.length ? `<ul class="steps">${m.steps.map(s => `<li>${escapeHtml(s)}</li>`).join('')}</ul>` : '') +
+    `<div class="bubble">${md ? mdHtml(m.text) : `<p>${escapeHtml(m.text)}</p>`}${m.full && m.full !== m.text ? `<details><summary>Full findings</summary>${escapeHtml(m.full)}</details>` : ''}</div>` +
+    (m.cards ?? []).map(cardHtml).join('') +
+    `<div class="chips">${m.link ? `<a class="chip" href="${escapeHtml(m.link)}" target="_blank" rel="noopener">Open in ${escapeHtml(m.via ?? 'source')} ▸</a>` : ''}` +
+    `${m.board ? `<button class="chip" type="button" data-view="${escapeHtml(m.board.id)}">Show ${escapeHtml(m.board.title)} ▸</button>` : ''}</div>` +
+    (m.case ? '<div class="rate" role="group" aria-label="Was this answer right?"><button type="button" data-right="1" aria-pressed="false">Right</button><button type="button" data-right="0" aria-pressed="false">Wrong</button></div>' : '');
+  el.querySelector('[data-view]')?.addEventListener('click', () => conn.view(m.board.id));
+  for (const c of m.cards ?? []) {
+    const box = el.querySelector(`[data-card="${CSS.escape(c.id)}"]`);
+    for (const b of box.querySelectorAll('[data-copy]')) b.onclick = () => copyText(c.steps[Number(b.dataset.copy)].command, b);
+    const save = box.querySelector('[data-save]');
+    save.onclick = () => { conn.runbook(m.id, c.id); save.disabled = true; save.textContent = 'Saving as a runbook…'; };
+  }
+  for (const b of el.querySelectorAll('.rate button')) b.onclick = () => {
+    conn.rate({ case: m.case }, b.dataset.right === '1');
+    for (const x of el.querySelectorAll('.rate button')) x.setAttribute('aria-pressed', String(x === b));
+    el.querySelector('.rate').classList.add('done');
+  };
+  return el;
+}
+function renderChat(list) {
+  chatMsgs = list;
+  thread.innerHTML = list.length ? '' : '<div class="empty">No conversation yet.</div>';
+  for (const m of list) thread.append(chatEl(m));
+  scrollDown(true);
+}
+function addChat(m) {
+  if (!chatMsgs.length) thread.innerHTML = '';
+  chatMsgs.push(m);
+  if (m.from === 'computer') thread.querySelector('.pending')?.remove();
+  const stick = atBottom() || m.from === 'you';
+  thread.append(chatEl(m));
+  scrollDown(stick);
+}
+function chatPending(step) {
+  let p = thread.querySelector('.pending');
+  if (!p) {
+    if (!chatMsgs.length) thread.innerHTML = '';
+    p = document.createElement('div');
+    p.className = 'msg computer pending';
+    p.innerHTML = `<div class="by"><span data-computer>${escapeHtml(who().name)}</span><i>working</i></div><ul class="steps"></ul><div class="bubble">Working on it…</div>`;
+    thread.append(p);
+  }
+  const li = document.createElement('li'); li.textContent = step;
+  p.querySelector('.steps').append(li);
+  scrollDown(false);
+}
+$('composer').onsubmit = e => {
+  e.preventDefault();
+  const text = $('q').value.trim();
+  if (!text) return;
+  conn.ask(text, $('q').dataset.about || undefined);
+  $('q').value = ''; delete $('q').dataset.about;
+};
+$('q').oninput = () => { if (!$('q').value) delete $('q').dataset.about; };
+
+// ---- a proposed fix, waiting for approval ----
+// The same rules as the 9000 monitor's plan card: every exact call is shown, approving takes two clicks, and the
+// server accepts it only from a signed-in person, for exactly the plan shown (hash).
+let armTimer = null;
+function renderPlan() {
+  const p = ship.state.plan, box = $('plan');
+  if (!p || !['pending', 'running', 'failed', 'unverified'].includes(p.status)) { box.hidden = true; return; }
+  const pending = p.status === 'pending', mins = Math.max(0, Math.round((p.expiresAt - Date.now()) / 60_000));
+  const step = s => `<li><code>${escapeHtml(s.tool)}</code> on ${escapeHtml(s.server ?? '?')}${!pending && s.status !== 'pending' ? ` · ${escapeHtml(s.status)}` : ''}<p>${escapeHtml(s.why)}</p><pre>${escapeHtml(JSON.stringify(s.args, null, 1))}</pre></li>`;
+  box.innerHTML = `<div class="ptitle">${escapeHtml(p.title)} <i>${escapeHtml(p.id)} · ${escapeHtml(p.status)}</i></div>
+    <h4>The problem</h4><p>${escapeHtml(p.problem)}</p>
+    <h4>What will run, in order</h4><ol>${p.steps.map(step).join('')}</ol>
+    <h4>Expected</h4><p>${escapeHtml(p.expected)}</p>
+    <h4>Risk</h4><p class="${p.destructive ? 'warn' : ''}">${escapeHtml(p.risk)}${p.destructive ? ' Includes a destructive step.' : ''}</p>
+    <h4>Undo</h4>${p.undo?.length ? `<ol>${p.undo.map(step).join('')}</ol>` : '<p class="warn">None given: this cannot be reversed automatically.</p>'}
+    <div class="acts">${pending ? `<button class="approve" type="button">Approve ${p.steps.length} step${p.steps.length > 1 ? 's' : ''}</button><button class="reject" type="button">Reject</button>`
+      : (['failed', 'unverified'].includes(p.status) && p.undo?.length ? '<button class="undo" type="button">Propose the undo</button>' : '')}
+      <small>${pending ? `Runs only when a signed-in person approves. Expires in ${mins} min.` : ''}</small></div>`;
+  box.hidden = false;
+  const ap = box.querySelector('.approve');
+  if (ap) ap.onclick = () => {
+    if (!ap.classList.contains('armed')) {
+      ap.classList.add('armed'); ap.textContent = `Click again to run ${p.steps.length} step${p.steps.length > 1 ? 's' : ''}`;
+      clearTimeout(armTimer); armTimer = setTimeout(renderPlan, 5000);
+      return;
+    }
+    clearTimeout(armTimer);
+    conn.plan(p.id, 'approve', p.hash);
+  };
+  box.querySelector('.reject')?.addEventListener('click', () => conn.plan(p.id, 'reject', p.hash));
+  box.querySelector('.undo')?.addEventListener('click', () => conn.plan(p.id, 'undo'));
+}
+</script>
+</body>
+</html>

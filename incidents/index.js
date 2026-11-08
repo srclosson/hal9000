@@ -2,11 +2,14 @@
 // investigations. INCIDENTS_URL (in-cluster service URL) and INCIDENTS_TOKEN (that service's AUTOMATION_TOKEN).
 // The 9000 acts on behalf of whoever asked (X-Actor), so the incident timeline shows the person, via HAL/SAL.
 
+import { PREVIEW } from '../preview.js';
 const URL_ = (process.env.INCIDENTS_URL ?? '').replace(/\/$/, '');
 const TOKEN = process.env.INCIDENTS_TOKEN;
 export const available = () => !!(URL_ && TOKEN);
 
 async function call(path, { method = 'GET', body, actor } = {}) {
+  // A preview (preview.js) reads Incidents but never writes to it (recall is a POST that only reads).
+  if (PREVIEW && method !== 'GET' && !/\/recall$/.test(path)) throw new Error('this is a preview of the 9000; writing to StackGen Incidents is switched off here');
   const res = await fetch(`${URL_}${path}`, {
     method, signal: AbortSignal.timeout(method === 'GET' && path.includes('copilot') ? 70_000 : 20_000),
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${TOKEN}`, 'X-Actor': actor || 'HAL 9000' },
@@ -28,6 +31,8 @@ export const listOpen = () => (available() ? call('/api/incidents?status=open') 
 // acknowledge(ref, { by, at, detected_at }): kept once, with a timeline entry.
 export const acknowledge = (ref, ack, actor) => call(`/api/incidents/${encodeURIComponent(ref)}`, { method: 'PATCH', actor, body: { acknowledge: ack } });
 export const addEvent = (ref, kind, body, actor) => call(`/api/incidents/${encodeURIComponent(ref)}/events`, { method: 'POST', actor, body: { kind, body } });
+// Opened by the 9000's own code (Aiden feedback, aiden/review.js), without the conversation's evidence attached.
+export const declare = (b, actor) => call('/api/incidents', { method: 'POST', actor, body: { ...b, source: 'hal9000' } });
 export const remember = (m, actor) => call('/api/memory', { method: 'POST', actor, body: m });
 // declared(incident, alertUid): an incident was just opened by the 9000 (Aiden adds its result if it has one).
 let declared = () => {};
@@ -50,7 +55,7 @@ export function tools() {
   if (!available()) return [];
   return [
     { name: 'open_incident',
-      description: 'Declare an incident in StackGen Incidents when the person asks to open, declare or raise one. Attaches the evidence you most recently gathered. Confirm the title and severity in your reply.',
+      description: 'Declare an incident in StackGen Incidents when the person asks to open, declare or raise one, or to file Aiden feedback (see your notes on Aiden). Attaches the evidence you most recently gathered. Confirm the title and severity in your reply.',
       inputSchema: { type: 'object', properties: {
         title: { type: 'string', description: 'What is happening, in a short sentence' },
         severity: { type: 'number', description: '1 critical (customers broadly affected), 2 major, 3 minor (default), 4 low' },

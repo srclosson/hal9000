@@ -1,0 +1,51 @@
+# A preview of the 9000 built from a pull request, for a person to try before it ships (capabilities/index.js, gate 2).
+# Applied only by .github/workflows/preview.yml, with a deploy credential limited to hal9000-pr-<n> namespaces
+# (deploy/preview-access). The workflow sets, per pull request:
+#   namespace          kustomize edit set namespace hal9000-pr-<n>
+#   image              kustomize edit set image docker.io/srclosson/hal9000@sha256:…   (pinned by digest: what is tried ships)
+#   host and PUBLIC_URL  pr-<n>.9000.stackgen.run, replacing PREVIEW_HOST below
+# Everything else is production's (../discovery) with preview mode on: read tools only, no plans, announcements or
+# Incidents writes, memory to a scratch collection (preview.js). Secrets come from the hal9000-keys Secret the workflow
+# creates in the namespace from the PREVIEW_HAL_ENV repository secret.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../discovery
+namespace: hal9000-pr-0
+images:
+  - name: docker.io/srclosson/hal9000
+    newTag: pr-0
+configMapGenerator:
+  - name: hal9000-config
+    behavior: merge
+    literals:
+      - HAL_PREVIEW=1
+      - HAL_PREVIEW_COLLECTION=hal9000-preview
+      - PUBLIC_URL=https://PREVIEW_HOST
+      - OTEL_SERVICE_NAME=hal9000-preview
+      - TTS_PROVIDER=browser
+      - "HOSTED_ON=a preview built from a pull request, aboard Discovery One (Civo cluster fe-apps-discovery-one), beside the real 9000"
+patches:
+  # The workflow creates (and labels) the namespace itself.
+  - target: { kind: Namespace }
+    patch: |-
+      $patch: delete
+      apiVersion: v1
+      kind: Namespace
+      metadata: { name: hal9000 }
+  - target: { kind: Ingress, name: hal9000 }
+    patch: |-
+      - op: replace
+        path: /spec/tls/0/hosts/0
+        value: PREVIEW_HOST
+      - op: replace
+        path: /spec/tls/0/secretName
+        value: hal9000-preview-tls
+      - op: replace
+        path: /spec/rules/0/host
+        value: PREVIEW_HOST
+  - target: { kind: Deployment, name: hal9000 }
+    patch: |-
+      - op: add
+        path: /metadata/labels/hal9000.stackgen.run~1preview
+        value: "true"

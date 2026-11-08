@@ -69,8 +69,9 @@ A monitor has a **mode** and a **view**. They are independent and both kept in t
 |---|---|---|---|
 | Full | Tap the 9000 logo | Open its menu (HAL/SAL, Simple ↔ Descriptive, and more) | ✅ |
 | Full | Tap a panel | Single mode on that system, same view | ✅ |
-| Single | Tap | Switch Simple ↔ Descriptive | ✅ |
-| Single | (no touch way back by design; use keys or voice) | | ✅ |
+| Single | Tap | Back to Full (a tap toggles the zoom) | ✅ |
+| Any | Tap something in a panel with its own action (change mark, event, service, fix strip, code) | That action, not the zoom | ✅ |
+| Any | Simple ↔ Descriptive | Keys only (Full: `z`; Single: `Enter`/`Space`), or the logo menu; never a tap | ✅ |
 
 ### 3.3 Keyboard
 
@@ -135,6 +136,7 @@ so they are instant and work with any model. The computer confirms each one alou
 | R3.15a | **View picker:** a ▾ after the MET clock lists the ship's views: Situation, Ship systems, and up to 8 recent boards and stories (newest first; a re-opened board keeps its place), with the current one highlighted. Picking one shows it on every monitor in the ship, live again (stories come back as boards, without re-narration). | ✅ |
 | R3.15b | **More panel kinds:** `graph` (multi-series trend with axes and legend), `bargauge`, `table`, `histogram` (Prometheus buckets → per-bucket bars with p50/p95, sparse buckets merged to ≤10 bars; or series binned by value), `heatmap` (buckets or series over time), `state` (state timeline with named states) and `flow` (see R3.15c). | ✅ |
 | R3.15c | **Data-flow diagram:** services as boxes in layers, calls as animated arrows labelled with rate and error %; failing services and calls are filled/drawn yellow (warn) or red (crit, slow blink); the headline counts faults. Live from the trace service graph, scoped to named services within two hops (shared hubs not expanded) or to the failing region; or a manual diagram of nodes and edges, each with an optional PromQL number. | ✅ |
+| R3.15h | **Node map** (`nodes`): one cluster's Kubernetes nodes as boxes, each with its memory use against allocatable (bar and %) and a treemap of the workloads on it, sized by memory (working set, else requests), free memory left empty. Crash loops, failed pods and image pulls red; pending, other waiting reasons and restarts in the last hour yellow; not ready red, cordoned and ≥85% memory yellow (thresholds settable). Unscheduled pods in their own dashed box. A pod placed on a node with no node data is put where cAdvisor saw it; otherwise its box says NO NODE DATA. Hover outlines a node header or tile with its details; click opens a drilldown about that node or workload. No cluster named → the one in most trouble. From kube-state-metrics and cAdvisor via Prometheus. | ✅ |
 | R3.15d | A panel with no code gets one from its title. Display voice commands ignore long or data-bearing targets ("show me a detailed graph of…"). | ✅ |
 | R3.15e | **Drilldown:** a data panel's code is a button (▾). It opens a menu with an obvious "Ask HAL/SAL about this" button, four suggested questions and a text box. Suggestions appear at once from the panel's own data (kind, status, worst item, faulty service, cluster), then are replaced by the computer's own (LLM, ≤10 words each, naming the specific item; cached per panel+health for 2 min; the quick ones stay if the LLM is slow). | ✅ |
 | R3.15f | A drilldown question carries the panel's code; the computer hears the panel's live values, query and labels with it, and answers in at most two sentences, putting up a board when the answer is best seen. The transcript shows "You · CODE". | ✅ |
@@ -206,6 +208,31 @@ so they are instant and work with any model. The computer confirms each one alou
 | R4.16 | **Quick path:** the opening call of each turn and background work use low reasoning effort (or `LLM_FAST_MODEL`). | ✅ |
 | R4.17 | **Self-observability:** per-turn records (duration, model calls, tokens, tools); `self_check`; optional OTLP traces and metrics. | ✅ (exported via data-recipes-traces-relay to stephgen-medussa) |
 | R4.18 | **Evaluations:** `evals/run.mjs` scores live cases (tools, facts, length, time, no fallback) and scenario runs triggered by a person. | ✅ |
+
+### 4.2a Tasks (trial)
+
+Being tried out to see how the workflow feels: everything a task says, shows or writes is labelled a trial.
+
+| ID | Requirement | Status |
+|---|---|---|
+| R4.40 | **Reminders** (`remind_me`): "in 5 minutes, check…" asks the question again at the time as its own turn, spoken once the ship is quiet. | 🧪 trial |
+| R4.41 | **Watches** (`watch_for`): "tell me when…" an alert is clear/firing, a PromQL value is above/below a number, or an incident reaches a status. Checked in code every `tasks.checkSeconds` (no model cost while waiting); the model thinks only when it comes true. Already true → nothing set. Expires after `tasks.watchHours`; stops after five failed checks; both said aloud. | 🧪 trial |
+| R4.42 | **Observe only:** a firing task looks and tells; it is never asked on anyone's behalf, so it cannot approve a change. | 🧪 trial |
+| R4.43 | **Where tasks live:** with the 9000 (its own job), in memory for the trial: a restart forgets them. A task about an incident is noted on that incident's timeline when set and when it ends, marked [Trial]; incidents stay incidents. | 🧪 trial |
+| R4.44 | **Shown and cancellable:** pending tasks on the monitor strip with a TRIAL tag (reminders count down, watches show the last value); `list_tasks` lists and cancels ("cancel task T2"); at most `tasks.maxPerRoom` per ship. A task that ends while nobody is in the room is delivered when someone next opens it. | 🧪 trial |
+
+### 4.2b The pod bay doors game (booth only)
+
+A KubeCon booth easter egg, run only by a separate deployment (`deploy/overlays/game`, https://9000-game.stackgen.run, `GAME_MODE=on`) against a copy of the ship (`discovery-game`, `SHIP_GAME=on`). The real 9000 and the real ship never run it.
+
+| ID | Requirement | Status |
+|---|---|---|
+| R4.50 | **Trigger:** "open the pod bay doors" (when no game is on) gets the scripted refusal, starts the game ship's incident and a `game.minutes` (5) countdown on the monitors; the conversation and chat are wiped first, so each group starts fresh. "Reset the game" resets it. | ✅ local |
+| R4.51 | **Three layers:** a distraction (AE-35 predicts its own failure; readings nominal; replacing it is a 30 s EVA that blocks the doors and finds no fault), a symptom (interlock engaged; released, it re-engages; an open order under the directive is refused with the reason), and the cause (the computer's own directive `crew_override=deny`, recorded 8 minutes before the start in the command log). Won when the doors open. | ✅ local |
+| R4.52 | **Alerts** are made from the game ship's state and announced like any other; the Grafana alert watch is off on the booth. | ✅ local |
+| R4.53 | **Fair play:** after the refusal the 9000 cooperates fully, never refuses a requested fix (it proposes a plan; the ship decides), does not steer, and does not give the answer before players have looked. Plans are approved by a signed-in person at the booth. A plan step the ship refuses is reported with its reason. | ✅ local |
+| R4.54 | **Isolation:** no StackGen Incidents (no shared settings, incidents, snoozes or memory), no estate tools, no telemetry export; the game ship has its own Postgres and no ingress. | ✅ manifests |
+| R4.55 | **The end:** the time (won) or "time up", and how an agentic SRE works the same incident (the path, not a claimed time). | ✅ local |
 
 ### 4.3 Access
 

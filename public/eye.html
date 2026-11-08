@@ -1,12 +1,14 @@
 <!doctype html>
 <html lang="en" data-theme="sal">
 <head>
+<script defer src="/assets/observability.js"></script>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
 <meta name="theme-color" content="#000000">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icons/icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="/icons/icon.svg">
 <title>9000 Eye</title>
 <link rel="stylesheet" href="/base.css">
@@ -172,7 +174,7 @@
   </div>
 
 <script type="module">
-import { connect, roomFromUrl, registerSW, keepAwake, toggleFullscreen, autoHideCursor } from '/shared.js';
+import { connect, roomFromUrl, registerSW, keepAwake, toggleFullscreen, autoHideCursor, personaOf } from '/shared.js';
 
 registerSW();
 autoHideCursor();
@@ -319,8 +321,9 @@ const conn = connect({
   room, role: 'eye',
   onState: s => {
     document.documentElement.dataset.theme = s.theme;
+    document.querySelector('link[rel=icon]')?.setAttribute('href', s.theme === 'hal' ? '/icons/icon.svg' : '/icons/icon-sal.svg');   // the tab shows this ship's eye
     document.documentElement.classList.toggle('alarm', !!s.alarm);   // an alert is firing: red, pulsing eye
-    $('name').textContent = s.theme === 'hal' ? 'HAL' : 'SAL';
+    $('name').textContent = personaOf(s, conn?.server).name;
   },
   onSay,
   onTalk: on => setTalk(on),

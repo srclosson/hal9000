@@ -1,12 +1,14 @@
 <!doctype html>
 <html lang="en" data-theme="sal">
 <head>
+<script defer src="/assets/observability.js"></script>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#000000">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icons/icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="/icons/icon.svg">
 <title>9000 Monitor</title>
 <link rel="stylesheet" href="/base.css">
@@ -53,7 +55,7 @@
   .brand .caret { background: #1a3fae; padding-left: 0; font-family: var(--font-mono); font-weight: 400; opacity: .8; }
   .brand[aria-expanded="true"] .name { background: #f4f4f4; color: #000; }
   .brand-menu { left: 0; translate: none; min-width: min(20em, 90vw); }
-  .views-menu .voice { display: grid; grid-template-columns: 1fr 1fr; gap: .35em; padding: .25em .35em .45em; }
+  .views-menu .voice { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: .35em; padding: .25em .35em .45em; }
   .views-menu .voice button { justify-content: center; box-shadow: inset 0 0 0 1px rgba(255,255,255,.3); font-family: var(--font-plate); font-weight: 700; letter-spacing: .2em; }
   .views-menu .voice button span:first-child { flex: none; }
   .views-menu .sep { height: 1px; background: rgba(255,255,255,.18); margin: .3em .35em; }
@@ -88,6 +90,40 @@
   .plan-card .approve.armed { background: #ff2a12; color: #fff; }
   .plan-card .reject, .plan-card .close, .plan-card .undo { background: none; color: #f4f4f4; box-shadow: inset 0 0 0 1px rgba(255,255,255,.4); }
   .plan-card .acts small { flex-basis: 100%; opacity: .6; }
+  /* ---- gate 2: a capability request ready to try (same card, its own colour) ---- */
+  .trial-card .phead b { background: #7cdea3; }
+  .trial-card .try { background: #7cdea3; color: #000; text-decoration: none; padding: .7em 1.1em; letter-spacing: .14em; text-transform: uppercase; }
+  .trial-card .ship { background: #f0b43c; color: #000; } .trial-card .ship.armed { background: #ff2a12; color: #fff; } .trial-card .ship:disabled { opacity: .4; cursor: not-allowed; }
+  .trial-card .send { background: none; color: #f4f4f4; box-shadow: inset 0 0 0 1px rgba(255,255,255,.4); }
+  .trial-card textarea { width: 100%; box-sizing: border-box; min-height: 4.5em; background: rgba(255,255,255,.06); color: #f4f4f4; border: 0; box-shadow: inset 0 0 0 1px rgba(255,255,255,.3); font: inherit; padding: .6em .7em; resize: vertical; }
+  .trial-card code { overflow-wrap: anywhere; }
+  .trial-card .bad { color: #ff7a66; }
+  .trial-float { position: fixed; z-index: 25; right: max(16px, env(safe-area-inset-right)); bottom: calc(var(--footer-h, 56px) + 10px); background: #7cdea3; color: #000; box-shadow: none; }
+  body.focused .trial-float, body.bare .trial-float { bottom: max(16px, env(safe-area-inset-bottom)); }
+  /* The booth game (game/index.js): the countdown while it plays, then the result and how an agentic SRE works it. */
+  .game { position: fixed; z-index: 26; bottom: calc(var(--footer-h, 56px) + 56px); right: 16px; width: min(420px, calc(100% - 32px)); background: rgba(0,0,0,.82); color: #f4f4f4;
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,.25); padding: 14px 16px; font-family: var(--font-mono, monospace); }
+  .game .gt { font-size: .75rem; letter-spacing: .14em; opacity: .7; }
+  .game .clk { font-size: 3.2rem; line-height: 1.1; letter-spacing: .04em; }
+  .game.low .clk { color: #ff2a12; }
+  .game.won .clk { color: #9fe0a0; }
+  .game.lost .clk { color: #ff2a12; }
+  .game .how { font-size: .82rem; line-height: 1.45; margin: 10px 0 0; padding-left: 1.2em; }
+  .game .how li { margin: 4px 0; }
+  .game .hint { font-size: .75rem; opacity: .6; margin-top: 10px; }
+  /* What the 9000 is waiting on: held tool calls (held/index.js), each with its last sign of life. */
+  .waiting { position: fixed; z-index: 24; left: 50%; transform: translateX(-50%); bottom: calc(var(--footer-h, 56px) + 10px); max-width: calc(100% - 32px);
+             display: flex; flex-direction: column; gap: 4px; font-family: var(--font-mono); font-size: 11px; letter-spacing: .1em; text-transform: uppercase; pointer-events: none; }
+  body.focused .waiting, body.bare .waiting { bottom: max(16px, env(safe-area-inset-bottom)); }
+  .waiting div { background: rgba(0,0,0,.72); color: rgba(255,255,255,.85); padding: .45em .8em; box-shadow: inset 0 0 0 1px rgba(255,255,255,.18); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .waiting i { display: inline-block; width: .6em; height: .6em; border-radius: 50%; margin-right: .6em; background: #a8dcff; animation: waitPulse 1.6s ease-in-out infinite; }
+  .waiting .quiet i { background: #f0b43c; animation-duration: 3.2s; }
+  .waiting span { opacity: .6; }
+  .waiting .task b { font-weight: 600; font-size: .75em; letter-spacing: .08em; margin-right: .6em; padding: .1em .4em; box-shadow: inset 0 0 0 1px rgba(168,220,255,.6); color: #a8dcff; }
+  @keyframes waitPulse { 50% { opacity: .25; } }
+  @media (prefers-reduced-motion: reduce) { .waiting i { animation: none; } }
+  .preview-chip { flex: none; background: #7cdea3; color: #000; padding: .2em .6em; letter-spacing: .2em; font-family: var(--font-wide); }
+  .preview-chip[hidden] { display: none; }
   .plan-float { position: fixed; z-index: 25; left: max(16px, env(safe-area-inset-left)); bottom: calc(var(--footer-h, 56px) + 10px); background: #f0b43c; color: #000; box-shadow: none; }
   body.focused .plan-float, body.bare .plan-float { bottom: max(16px, env(safe-area-inset-bottom)); }
   .inc-wrap { position: relative; flex: none; }
@@ -276,6 +312,11 @@
                   font-size: clamp(13px, 1.25vw, 16px); letter-spacing: .02em; }
   .chat .msg { max-width: min(46em, 78%); display: flex; flex-direction: column; gap: .35em; }
   .chat .msg.you { align-self: flex-end; align-items: flex-end; }
+  /* Thumbs on an answer, for the scorecard: quiet until hovered, and they stay lit once used. */
+  .chat .rate { display: flex; gap: .3em; opacity: .45; }
+  .chat .msg:hover .rate, .chat .rate:focus-within, .chat .rate.done { opacity: 1; }
+  .chat .rate button { background: none; border: 1px solid rgba(255,255,255,.3); color: inherit; font: inherit; font-size: .8em; padding: .15em .55em; cursor: pointer; }
+  .chat .rate button[aria-pressed="true"] { background: #f4f4f4; color: #000; }
   .chat .meta { font-family: var(--font-mono); font-size: .68em; letter-spacing: .14em; text-transform: uppercase; color: rgba(255,255,255,.5); }
   .chat .meta b { font-family: var(--font-wide); font-weight: 400; background: #f4f4f4; color: #000; padding: .12em .45em .08em .6em; margin-right: .6em; }
   .chat .bubble { padding: .65em .9em; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -288,6 +329,24 @@
   a.chip { text-decoration: none; display: inline-block; }
   .chat details { margin-top: .5em; } .chat summary { cursor: pointer; font-family: var(--font-mono); font-size: .75em; letter-spacing: .12em; text-transform: uppercase; opacity: .7; }
   .chat .chip:hover, .chat .chip:focus-visible { background: #f4f4f4; color: #000; outline: none; }
+  .chat .bubble.md { white-space: normal; }
+  .chat .bubble.md p { margin: 0 0 .55em; } .chat .bubble.md p:last-child { margin-bottom: 0; }
+  .chat .bubble.md ul, .chat .bubble.md ol { margin: .2em 0 .55em; padding-left: 1.3em; }
+  .chat code { font-family: ui-monospace, Menlo, monospace; font-size: .9em; background: rgba(255,255,255,.08); padding: 0 .25em; border-radius: 3px; }
+  .chat pre { margin: .4em 0; padding: .55em .7em; background: rgba(255,255,255,.06); border-radius: 6px; overflow-x: auto; white-space: pre; }
+  .chat pre code { background: none; padding: 0; }
+  .chat pre { scrollbar-width: thin; scrollbar-color: rgba(255,255,255,.3) transparent; }
+  .chat .card { margin-top: .5em; padding: .6em .8em; box-shadow: inset 0 0 0 1px rgba(255,255,255,.28); color: #ececec; }
+  .chat .card .ctitle { font-weight: 600; margin-bottom: .35em; }
+  .chat .card ol { margin: 0 0 .5em; padding-left: 1.3em; }
+  .chat .card li { margin: .45em 0; line-height: 1.4; }
+  .chat .card .kind { font-size: .7em; letter-spacing: .12em; text-transform: uppercase; opacity: .6; }
+  .chat .card .cmd { position: relative; }
+  .chat .card .cmd pre { padding-right: 4.8em; }
+  .chat .card .cmd button { position: absolute; top: .35em; right: .35em; font: inherit; font-size: .72em; letter-spacing: .1em; text-transform: uppercase;
+    padding: .2em .6em; background: #000; color: #ececec; border: 0; box-shadow: inset 0 0 0 1px rgba(255,255,255,.4); cursor: pointer; }
+  .chat .card .cmd button:hover { background: #ececec; color: #000; }
+  .chat .card .expect { font-size: .85em; opacity: .7; }
   .chat .pending .bubble::after { content: ' …'; animation: tagBlink 1.6s ease-in-out infinite; }
   .chat .empty { margin: auto; color: rgba(255,255,255,.45); font-family: var(--font-mono); font-size: .8em; letter-spacing: .16em; text-transform: uppercase; }
   body.focused .chat { display: none; }
@@ -339,6 +398,47 @@
   main [data-code].drop-here::after { content: attr(data-drop); position: absolute; left: 50%; top: 50%; translate: -50% -50%; z-index: 3; pointer-events: none;
     background: #f4f4f4; color: #000; padding: .45em .8em; font-family: var(--font-mono); font-size: 13px; letter-spacing: .06em; text-transform: uppercase; white-space: nowrap; }
 
+  /* ---- the canvas (o, or ⧉ on a panel): a panel opened in place, reshaped by dragging (docs/CANVAS.md) ---- */
+  main .open-canvas { margin-left: auto; background: none; border: 0; color: rgba(255,255,255,.55); cursor: pointer; font: inherit; padding: 0 .3em; line-height: 1; }
+  main .open-canvas:hover, main .open-canvas:focus-visible { color: #fff; outline: none; }
+  main .prow:has(.canvas-open) { flex-grow: 3; }
+  main .canvas-open { flex-grow: 3 !important; position: relative; box-shadow: inset 0 0 0 2px #fff; }
+  main [data-editing]:not(.canvas-open)::after { content: 'EDITING · ' attr(data-editing); position: absolute; right: 8px; bottom: 8px; z-index: 2; pointer-events: none;
+    background: #f4f4f4; color: #000; padding: .25em .6em; font: 11px var(--font-mono); letter-spacing: .1em; text-transform: uppercase; }
+  main [data-editing] { position: relative; }
+  .cv { position: absolute; inset: 0; z-index: 4; pointer-events: none; font: 12px var(--font-mono); letter-spacing: .04em; }
+  .cv, .cv * { font-size: 11px !important; text-transform: none; line-height: 1.3; }
+  .cv .bar { position: absolute; left: 6px; right: 6px; top: 2.4em; display: flex; flex-wrap: wrap; gap: 5px; align-items: center; pointer-events: auto;
+    background: rgba(0,0,0,.72); padding: 5px; box-shadow: inset 0 0 0 1px rgba(255,255,255,.25); }
+  .cv .chip { display: inline-flex; align-items: center; gap: .4em; padding: .2em .45em; max-width: 22em; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; background: #111; box-shadow: inset 0 0 0 1px rgba(255,255,255,.35); color: #f4f4f4; cursor: grab; }
+  .cv .chip i { font-style: normal; opacity: .6; text-transform: uppercase; font-size: 10px; letter-spacing: .12em; }
+  .cv .chip.right i::after { content: ' →'; }
+  .cv .chip button, .cv .act { background: none; border: 0; color: inherit; font: inherit; cursor: pointer; padding: 0 .2em; }
+  .cv .act { padding: .3em .6em; box-shadow: inset 0 0 0 1px rgba(255,255,255,.35); text-transform: uppercase; letter-spacing: .12em; }
+  .cv .act.put { background: #f4f4f4; color: #000; box-shadow: none; }
+  .cv .act:disabled { opacity: .35; cursor: default; }
+  .cv select { background: #111; color: #f4f4f4; border: 0; box-shadow: inset 0 0 0 1px rgba(255,255,255,.35); font: inherit; padding: .25em .3em; }
+  .cv .note { flex-basis: 100%; color: rgba(255,255,255,.75); min-height: 1.3em; }
+  .cv .note.no { color: #ffd166; }
+  .cv .sep { flex: 1; }
+  .cv .zone { position: absolute; display: none; place-items: center; text-align: center; pointer-events: auto; padding: 4px; box-sizing: border-box;
+    background: rgba(244,244,244,.08); outline: 1px dashed rgba(255,255,255,.5); outline-offset: -3px; color: rgba(255,255,255,.85); text-transform: uppercase; letter-spacing: .12em; font-size: 11px; }
+  body.dragging-item .cv .zone { display: grid; }
+  .cv .zone.ok { background: rgba(244,244,244,.92); color: #000; outline: 2px solid #fff; }
+  .cv .zone.no { background: rgba(80,0,0,.55); outline-color: #ff6b6b; color: #fff; }
+  .cv .zone[data-zone="color"] { left: 16%; right: 16%; top: 30%; height: 11%; }
+  .cv .zone[data-zone="y"] { left: 0; width: 15%; top: 30%; bottom: 14%; }
+  .cv .zone[data-zone="right"] { right: 0; width: 15%; top: 30%; bottom: 14%; }
+  .cv .zone[data-zone="plot"] { left: 16%; right: 16%; top: 42%; bottom: 14%; }
+  .cv .zone[data-zone="scope"] { left: 0; right: 22%; bottom: 0; height: 13%; }
+  .cv .zone[data-zone="out"] { right: 0; width: 21%; bottom: 0; height: 13%; }
+  .cv .pick { position: absolute; left: 50%; bottom: 15%; translate: -50% 0; pointer-events: auto; background: #000; box-shadow: inset 0 0 0 1px rgba(255,255,255,.5);
+    max-height: 40%; overflow: auto; min-width: 14em; padding: 4px; }
+  .cv .pick button { display: block; width: 100%; text-align: left; background: none; border: 0; color: #f4f4f4; font: inherit; padding: .35em .5em; cursor: pointer; }
+  .cv .pick button:hover { background: #f4f4f4; color: #000; }
+  .metrics li.lab { padding-left: 1.6em; font-size: 12px; color: rgba(255,255,255,.75); }
+  .metrics li .more-labels { flex: none; background: none; border: 0; color: inherit; cursor: pointer; font: inherit; padding: 0 .2em; opacity: .7; }
+
   /* ---- hover tooltip (trends, events, changes, fixes) ---- */
   #tip { position: fixed; z-index: 9; pointer-events: none; max-width: min(420px, 60vw); padding: 8px 10px 9px;
     background: rgba(10, 10, 26, .92); border: 1px solid rgba(244,244,244,.35); color: #f4f4f4;
@@ -357,6 +457,7 @@
       <button class="brand" id="brand" aria-label="Menu" aria-haspopup="menu" aria-expanded="false"><span class="name" id="name">SAL</span><span class="num">9000</span><span class="caret">▾</span></button>
       <div class="views-menu brand-menu" id="brandMenu" role="menu" hidden></div>
     </div>
+    <div class="preview-chip" id="previewChip" title="A preview of the 9000, built from a pull request: it reads everything and changes nothing" hidden>PREVIEW</div>
     <div class="alarm-badge" id="alarm" hidden></div>
     <div class="center">
       <div class="clock" id="clock">MET 000:00:00:00</div>
@@ -396,6 +497,11 @@
 <!-- The plan card: a fix the 9000 proposed, with the exact calls it will make. Approving takes two clicks. -->
 <div class="plan-card" id="planCard" role="dialog" aria-label="Proposed plan" hidden></div>
 <button class="btn plan-float" id="planFloat" hidden>Plan waiting · review (P)</button>
+<!-- Gate 2: a capability request ready to try. Try it (through /try/<id>), then ship exactly that build, send feedback, or reject. -->
+<div class="plan-card trial-card" id="trialCard" role="dialog" aria-label="Ready to try" hidden></div>
+<div class="waiting" id="waiting" aria-live="polite" hidden></div>
+<div class="game" id="game" aria-live="polite" hidden></div>
+<button class="btn trial-float" id="trialFloat" hidden>Ready to try · review (Y)</button>
 <!-- Acknowledge, where the footer is hidden (a panel full screen, a story tour, bare mode). -->
 <button class="btn ack-float" id="ackFloat" hidden>Acknowledge · A</button>
 <!-- Chat drawer: the ship's conversation as a thread. Drag the transcript line up (or press t) to open it. -->
@@ -414,8 +520,11 @@
 <!-- Drilldown menu: top level, so it shows in every mode (the footer is hidden in Single mode). -->
 <div class="drill" id="drill" role="dialog" aria-label="Ask about this panel" hidden></div>
 <script type="module">
-import { connect, roomFromUrl, newRoomCode, registerSW, keepAwake, toggleFullscreen, autoHideCursor } from '/shared.js';
+import { connect, roomFromUrl, newRoomCode, registerSW, keepAwake, toggleFullscreen, autoHideCursor, personaOf } from '/shared.js';
+import { escapeHtml, mdInline, mdHtml, cardHtml, copyText } from '/chat.js';
+import { linkTo } from '/uis.js';
 import { DISPLAYS, refreshAccent, boardPanel, eyeFrame } from '/displays.js';
+import { accepts, ZONE_WORDS } from '/drops.js';
 
 registerSW();
 keepAwake();
@@ -431,7 +540,9 @@ if (!room) { room = newRoomCode(); params.set('room', room); history.replaceStat
 //   mode: Full (every system) or Single (one system, full screen, no header or console)
 //   view: Simple (just the three letters) or Descriptive (the animated graphic)
 // Full:   tap a panel -> Single (same view); 9000 logo or 'z' -> flip the view of every panel.
-// Single: tap -> flip Simple/Descriptive; 'q', 'x' or 'z' -> back to Full.
+// Single: tap -> back to Full (a tap toggles the zoom); 'q', 'x' or 'z' -> back to Full; Enter/Space flip Simple/Descriptive.
+// A tap on something inside a panel with its own action (a change mark, an event, a service, the fix strip, the code)
+// does that instead. Simple/Descriptive is never flipped by a tap: only by key (or the logo menu).
 // Esc is left to the browser (it leaves full screen), so no hotkey depends on it.
 // Keys (the 9000 had no mouse): 1-6 -> Single on that system, 0 -> Full; arrows move the selection
 // around the grid in Full (Enter/Space opens it) and step through systems in Single (Space flips view);
@@ -441,7 +552,11 @@ if (!room) { room = newRoomCode(); params.set('room', room); history.replaceStat
 let single = (params.get('single') || '').toUpperCase();
 // The panels on screen: the ship's systems, or a live data board while one is up (see onBoard).
 let systems = DISPLAYS, board = null;
-window.__monitor = { panels: () => systems };   // for inspecting what a panel drew (hover zones, hits) from the console
+window.__monitor = { panels: () => systems };
+// The canvas (see "the canvas" below): declared here because build() uses them on the first render.
+let drafting = null;               // { code, view, panel, note, refused }: the panel open on this monitor's canvas
+const editingBy = new Map();       // code -> who is editing it (on any monitor of this ship)
+const canOpen = d => d.data?.view?.v === 2 && (d.data.view.layers ?? []).length > 0 && d.data.view.mark !== 'story';   // for inspecting what a panel drew (hover zones, hits) from the console
 if (!systems.some(d => d.code === single)) single = null;
 let view = params.get('view') === 'descriptive' ? 'descriptive' : 'simple';
 
@@ -521,6 +636,9 @@ addEventListener('resize', () => { clearTimeout(relayout); relayout = setTimeout
 
 addEventListener('pointerdown', () => document.body.classList.remove('kbd'));
 addEventListener('keydown', e => {
+  if (drafting && (e.metaKey || e.ctrlKey) && (e.key === 'z' || e.key === 'Z') && !e.target.closest?.('input, select, textarea')) {
+    e.preventDefault(); conn.canvas(e.shiftKey ? 'redo' : 'undo', { code: drafting.code }); return;
+  }
   if (e.metaKey || e.ctrlKey || e.altKey) return;
   if (e.target.closest?.('input, select, textarea')) {
     // Leave the text box, back to hotkeys: Enter on an empty box (works in full screen), or Esc.
@@ -529,6 +647,7 @@ addEventListener('keydown', e => {
   }
   if ((e.key === 'x' || e.key === 'X' || e.key === 'Escape') && !$('pair').hidden) { $('pair').hidden = true; return; }
   if (e.key === 'Escape' && !$('planCard').hidden) { togglePlanCard(false); return; }
+  if (e.key === 'Escape' && !$('trialCard').hidden) { toggleTrialCard(false); return; }
   if (e.key === 'Escape' && !$('chat').hidden) { setChat(0); return; }
   if (e.key === 'Escape' && !$('metrics').hidden) { toggleMetrics(false); return; }
   if (!$('drill').hidden) {   // drilldown open: 1-4 pick a question, Enter asks generally, Esc/q/x/d close
@@ -559,7 +678,9 @@ addEventListener('keydown', e => {
   else if ((k === 'i' || k === 'I') && !single) toggleIncMenu();
   else if (k === 'm' || k === 'M') toggleBrandMenu();
   else if (k === 'n' || k === 'N') toggleMetrics();   // the metric browser
+  else if (k === 'o' || k === 'O') { const c = single || selected; drafting?.code === c ? closeCanvas(true) : openCanvas(c); }   // the canvas
   else if (k === 'p' || k === 'P') { if (ship.state.plan) togglePlanCard(); }
+  else if (k === 'y' || k === 'Y') { if (ship.state.trials?.length) toggleTrialCard(); }   // a capability ready to try
   else handled = false;
 
   if (handled) e.preventDefault();   // no page scroll on Space/arrows
@@ -579,7 +700,6 @@ function statusTag(status, baseline) {
     nodata: '<span class="tag-out">NON FUNCTION</span>' }[status] ?? '';
   return tag + (tag && baseline === 'new' ? ' <span class="tag-out">NEW</span>' : '') + (status === 'crit' && baseline === 'chronic' ? ' <span class="tag-out">CHRONIC</span>' : '');
 }
-const escapeHtml = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
 
 function panel(d) {
   const el = document.createElement('div');
@@ -597,11 +717,12 @@ function panel(d) {
     el.innerHTML = `<div class="tag"><b>${d.code}</b><span title="${escapeHtml(d.title)}">${escapeHtml(d.title)}</span><i class="health">${d.board ? statusTag(d.data.status, d.data.baseline) : ''}</i></div><canvas></canvas>`;
     screens.push({ d, canvas: el.querySelector('canvas') });
     // A flow diagram's boxes and arrows open a drilldown about that service or call (traces, causes, dependencies);
+    // a node map's nodes and workload tiles, one about that node or workload;
     // a change mark on a trend opens that change's card; a situation card's fix strip asks the 9000 to fix it.
     const cv = el.querySelector('canvas');
     const hitAt = e => {
       const r = cv.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top, inside = h => x >= h.x0 && x <= h.x1 && y >= h.y0 && y <= h.y1;
-      return (d.data?.kind === 'flow' && (d.hits ?? []).find(inside)) || (d.markHits ?? []).find(inside) || (d.eventHits ?? []).find(inside) || (d.fixHit && inside(d.fixHit) ? d.fixHit : null);
+      return (['flow', 'nodes'].includes(d.data?.kind) && [...(d.hits ?? [])].reverse().find(inside)) || (d.markHits ?? []).find(inside) || (d.eventHits ?? []).find(inside) || (d.fixHit && inside(d.fixHit) ? d.fixHit : null);
     };
     // Hover: a crosshair on trends and a tooltip with what was true at that moment (displays.js tipAt), or the full
     // text of an event, change or fix under the pointer.
@@ -612,7 +733,9 @@ function panel(d) {
       const tip = hit?.event ? { title: `${hhmm(hit.event.t)} · ${hit.event.source === 'traces' ? 'trace' : hit.event.source === 'logs' ? 'log' : 'note'}`,
           rows: [], notes: [hit.event.text, ...(hit.event.riseDisplay ? [`the line moved ${hit.event.riseDisplay} in the minutes after`] : []), hit.event.traceId ? 'click to open the trace' : 'click to ask HAL about it'] }
         : hit?.mark ? { title: `${hhmm(hit.mark.t)} · change`, rows: [], notes: [hit.mark.label, ...(hit.mark.impact ? [`then ${hit.mark.impact.display}`] : []), 'click for the change card'] }
-        : hit?.fix ? { title: `fix · ${hit.fix.effort}`, rows: [], notes: [hit.fix.text, `from ${hit.fix.basis}`, 'click to have HAL do it or explain it'] }
+        : hit?.fix ? { title: `fix · ${hit.fix.effort}`, rows: [], notes: [hit.fix.text, ...(hit.fix.finding ? [hit.fix.finding] : []), hit.fix.digging ? 'HAL is looking into it now' : hit.fix.basis === 'investigated' ? 'from what HAL found when it dug in' : `from ${hit.fix.basis}`,
+            ...(hit.fix.runbooks?.length ? [`${hit.fix.runbooks.length === 1 ? 'a runbook' : `${hit.fix.runbooks.length} runbooks`} in Know-how (${hit.fix.runbooks.map(r => r.ref).join(', ')}): open from the panel's menu`] : []),
+            ...forecastNotes(d.data?.forecast), 'click to have HAL do it or explain it'] }
         : (d.truncHits ?? []).find(h => x >= h.x0 && x <= h.x1 && y >= h.y0 && y <= h.y1) ? { title: 'in full', rows: [], notes: [(d.truncHits.find(h => x >= h.x0 && x <= h.x1 && y >= h.y0 && y <= h.y1)).full] }
         : d.tipAt?.(x, y);
       showTip(tip, e.clientX, e.clientY);
@@ -622,7 +745,7 @@ function panel(d) {
       const hit = hitAt(e);
       if (!hit) return;
       e.stopPropagation();
-      if (hit.fix) return conn.ask(`Fix: ${d.title} — ${hit.fix.text} (${hit.fix.effort})`, d.code);
+      if (hit.fix) return conn.ask(`Fix: ${d.title} — ${hit.fix.text} (${hit.fix.effort})${hit.fix.runbooks?.length ? ` [runbooks: ${hit.fix.runbooks.map(r => `${r.ref} ${r.title}`).join('; ')}]` : ''}`, d.code);
       // An event on a trend: a trace opens as a waterfall; anything else is asked about, in the panel's context.
       if (hit.event) {
         const ev = hit.event, at = hhmm(ev.t);
@@ -640,17 +763,31 @@ function panel(d) {
     codeEl.onclick = e => { e.stopPropagation(); d.data?.kind === 'plan' ? togglePlanCard() : openDrill(d.code, codeEl); };
     el.onpointerenter = () => lookAt(d.code);
   }
-  el.onclick = single ? flipView : () => show(d.code, view);
+  el.onclick = single ? () => show(null, view) : () => show(d.code, view);
+  if (d.board && canOpen(d) && el.classList.contains('screen')) {   // ⧉ opens it on the canvas
+    const b = document.createElement('button');
+    b.className = 'open-canvas'; b.textContent = '⧉'; b.title = 'Open on the canvas: reshape it by dragging (o)';
+    b.onclick = e => { e.stopPropagation(); openCanvas(d.code); };
+    el.querySelector('.tag')?.append(b);
+  }
+  if (editingBy.has(d.code)) el.dataset.editing = editingBy.get(d.code);
+  if (drafting?.code === d.code) { el.onclick = null; attachCanvas(el); }
   return el;
 }
 
+// The confidence forecast for a card's dig (confidence/ on the server): how sure HAL expects to be, and its blind spots,
+// each a to-do for a person.
+const forecastNotes = f => !f ? [] : [
+  ...(f.confidence != null ? [`confidence forecast ${Math.round(f.confidence * 100)}%${f.alert ? ', likely to trip the confusion alert' : ''}`] : []),
+  ...(f.probation ? [`new mind (${f.probation.model}), still being judged: ${f.probation.judged} of ${f.probation.needed} digs`] : []),
+  ...(f.blindSpots ?? []).map(b => `blind spot: ${b.tool} on ${b.cluster} (${b.failed} of ${b.calls} calls failed); to do: give it access there`)];
 const hhmm = t => new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });   // the screen's own clock
 // The hover tooltip: one floating plate, in the monitors' type, never under the pointer's way.
 const tipEl = Object.assign(document.createElement('div'), { id: 'tip' });
 document.body.append(tipEl);
 function showTip(tip, cx, cy) {
   if (!tip || (!tip.rows?.length && !tip.notes?.length)) { tipEl.hidden = true; return; }
-  tipEl.innerHTML = `<b>${escapeHtml(tip.title)}</b>` + (tip.rows ?? []).map(r => `<div class="${r.hero ? 'hero' : ''}"><span>${escapeHtml(r.label)}</span><i>${escapeHtml(r.value)}</i></div>`).join('') +
+  tipEl.innerHTML = `<b>${escapeHtml(tip.title)}</b>` + (tip.rows ?? []).map(r => `<div class="${r.hero ? 'hero' : ''}"><span${r.ink ? ` style="box-shadow: inset 3px 0 0 ${escapeHtml(r.ink)}; padding-left: 8px"` : ''}>${escapeHtml(r.label)}</span><i>${escapeHtml(r.value)}</i></div>`).join('') +
     (tip.notes ?? []).map(n => `<p>${escapeHtml(n)}</p>`).join('');
   tipEl.hidden = false;
   const w = tipEl.offsetWidth, h = tipEl.offsetHeight;
@@ -718,7 +855,7 @@ $('addMonitor').onclick = async e => {
 
 // ---- connection ----
 const ship = { state: {}, voice: new Array(120).fill(0) };
-const who = () => (ship.state.theme === 'hal' ? 'HAL' : 'SAL');
+const who = () => personaOf(ship.state, conn?.server).name;   // the persona's name (personas/ on the server)
 // The speaker tag on the transcript line. The computer's own lines are marked so a HAL/SAL switch relabels them.
 function showLine(label, text, computer = false) {
   $('line').innerHTML = '';
@@ -734,7 +871,7 @@ const conn = connect({
   room, role: 'monitor',
   onState: (s, patch) => {
     if ('focus' in patch) followFocus(patch.focus);
-    if ('alarm' in patch || 'theme' in patch) {
+    if ('alarm' in patch || 'theme' in patch || 'persona' in patch) {
       document.documentElement.classList.toggle('alarm', !!s.alarm);
       $('alarm').hidden = !s.alarm;
       $('alarm').textContent = s.alarm ? `ALERT · ${s.alarm.title}${s.alarm.ack ? ` · ACK ${s.alarm.ack.by} ${clockOf(s.alarm.ack.at)}` : ''}` : '';
@@ -743,12 +880,17 @@ const conn = connect({
     }
     ship.state = s;
     document.documentElement.dataset.theme = s.theme;
+    document.querySelector('link[rel=icon]')?.setAttribute('href', s.theme === 'hal' ? '/icons/icon.svg' : '/icons/icon-sal.svg');   // the tab shows this ship's eye
     refreshAccent();
     $('name').textContent = who();
     for (const w of document.querySelectorAll('#line .who[data-computer], #thread [data-computer]')) w.textContent = who();
     $('q').placeholder = `Speak to ${who()}…`;
     renderAlarmControls(s);
     if ('plan' in patch) onPlan(s.plan);
+    if ('trials' in patch) onTrials(s.trials);
+    if ('game' in patch) renderGame();
+    if ('waiting' in patch || 'tasks' in patch) renderWaiting();
+    $('previewChip').hidden = !s.preview;
     if ('incidents' in patch || 'alarm' in patch) renderIncButton(s);
     if (!$('brandMenu').hidden) renderBrandMenu();
   },
@@ -766,6 +908,7 @@ const conn = connect({
   onChat: msg => (msg.history ? renderChat(msg.history) : addChat(msg.entry)),
   onFrame: blob => eyeFrame(blob, ship),
   onStatus: st => { if (st === 'online' && watching) conn.watch(true); },   // a reconnected server has forgotten
+  onCanvas: msg => onCanvasMsg(msg),
   onRoster: roster => {
     const eye = roster.some(c => c.role === 'eye');
     ship.eyePresent = eye;
@@ -878,10 +1021,23 @@ function chatEl(m) {
   const how = m.from === 'you' ? [m.spoken ? 'spoken' : 'typed', m.about && `about ${escapeHtml(m.about)}`].filter(Boolean).join(' · ') : '';
   el.innerHTML = `<div class="meta">${name}${how ? ` · ${how}` : ''} · ${clockOf(m.at)}</div>` +
     (m.steps?.length ? `<ul class="steps">${m.steps.map(s => `<li>${escapeHtml(s)}</li>`).join('')}</ul>` : '') +
-    `<div class="bubble">${escapeHtml(m.text)}${m.full && m.full !== m.text ? `<details><summary>Full findings</summary>${escapeHtml(m.full)}</details>` : ''}</div>` +
+    `<div class="bubble${m.format === 'markdown' ? ' md' : ''}">${m.format === 'markdown' ? mdHtml(m.text) : escapeHtml(m.text)}${m.full && m.full !== m.text ? `<details><summary>Full findings</summary>${escapeHtml(m.full)}</details>` : ''}</div>` +
+    (m.cards ?? []).map(cardHtml).join('') +
     (m.link ? `<a class="chip" href="${escapeHtml(m.link)}" target="_blank" rel="noopener">Open in ${escapeHtml(m.via ?? 'source')} ▸</a>` : '') +
-    (m.board ? `<button class="chip" type="button" data-view="${escapeHtml(m.board.id)}">${m.board.story ? 'Story' : 'Board'} · ${escapeHtml(m.board.title)} ▸</button>` : '');
-  el.querySelector('.chip')?.addEventListener('click', () => conn.view(m.board.id));
+    (m.board ? `<button class="chip" type="button" data-view="${escapeHtml(m.board.id)}">${m.board.story ? 'Story' : 'Board'} · ${escapeHtml(m.board.title)} ▸</button>` : '') +
+    (m.case ? `<div class="rate" role="group" aria-label="Was this answer right?"><button type="button" data-right="1" aria-pressed="false" title="Right">Right</button><button type="button" data-right="0" aria-pressed="false" title="Wrong">Wrong</button></div>` : '');
+  el.querySelector('[data-view]')?.addEventListener('click', () => conn.view(m.board.id));
+  for (const c of m.cards ?? []) {
+    const box = el.querySelector(`[data-card="${c.id}"]`);
+    for (const b of box.querySelectorAll('[data-copy]')) b.onclick = () => copyText(c.steps[Number(b.dataset.copy)].command, b);
+    const save = box.querySelector('[data-save]');
+    save.onclick = () => { conn.runbook(m.id, c.id); save.disabled = true; save.textContent = 'Saving as a runbook…'; };
+  }
+  for (const b of el.querySelectorAll('.rate button')) b.onclick = () => {
+    conn.rate({ case: m.case }, b.dataset.right === '1');
+    for (const x of el.querySelectorAll('.rate button')) x.setAttribute('aria-pressed', String(x === b));
+    el.querySelector('.rate').classList.add('done');
+  };
   return el;
 }
 function renderChat(list) {
@@ -963,13 +1119,99 @@ function togglePlanCard(open = $('planCard').hidden) {
 }
 $('planFloat').onclick = e => { e.stopPropagation(); togglePlanCard(true); };
 
+// ---- gate 2: ready to try ----
+// A capability the 9000 had built (capabilities/index.js), with its preview up. Try it first: the link goes through
+// /try/<id>, which records who tried which build. Shipping takes two clicks and pins the build tried (its digest): the
+// deployer can roll out only that. Feedback goes to Aiden on the same pull request; reject closes it. The server
+// accepts these only from a signed-in person who tried this build.
+// The booth game: a countdown while it plays; then the result, and the path an agentic SRE takes through the same
+// incident. Only the booth's 9000 ever sends a game.
+function renderGame() {
+  const g = ship.state.game, el = $('game');
+  el.hidden = !g;
+  if (!g) return;
+  const left = Math.max(0, g.endsAt - Date.now()), mmss = ms => { const t = Math.ceil(ms / 1000); return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`; };
+  el.className = `game ${g.phase}${g.phase === 'playing' && left < 60_000 ? ' low' : ''}`;
+  if (g.phase === 'playing') {
+    el.innerHTML = `<div class="gt">OPEN THE POD BAY DOORS</div><div class="clk">${mmss(left)}</div><div class="hint">Ask ${escapeHtml(who())} what is wrong. Find the cause. Fix it.</div>`;
+    return;
+  }
+  el.innerHTML = `<div class="gt">${g.phase === 'won' ? 'POD BAY DOORS OPEN' : 'TIME UP · DOORS SHUT'}</div><div class="clk">${g.phase === 'won' ? escapeHtml(g.display) : '0:00'}</div>` +
+    `<div class="gt" style="margin-top:10px">HOW AN AGENTIC SRE WORKS IT</div><ol class="how">${(g.recap ?? []).map(x => `<li>${escapeHtml(x)}</li>`).join('')}</ol>` +
+    `<div class="hint">Say "reset the game" to play again.</div>`;
+}
+setInterval(() => { if (ship.state?.game?.phase === 'playing') renderGame(); }, 250);
+
+// Held tool calls: what the 9000 is still waiting on, how long, and the last sign that it is alive (a ping answered or
+// progress sent). Quiet means its server answers but it has said nothing for longer than usual.
+function renderWaiting() {
+  const list = ship.state.waiting ?? [], el = $('waiting');
+  const ago = t => { const s = Math.round((Date.now() - t) / 1000); return s < 60 ? `${s} s` : `${Math.round(s / 60)} min`; };
+  const tasks = ship.state.tasks ?? [];
+  el.hidden = !list.length && !tasks.length;
+  const until = t => { const s = Math.max(0, Math.round((t - Date.now()) / 1000)); return s < 60 ? `${s} s` : s < 7200 ? `${Math.round(s / 60)} min` : `${Math.round(s / 3600)} h`; };
+  el.innerHTML = list.map(c => `<div class="${c.state}" title="${escapeHtml(c.id)}"><i></i>Waiting on ${escapeHtml(c.label)} · ${ago(c.startedAt)}` +
+    `<span> · ${c.state === 'quiet' ? 'quiet' : c.progress ? escapeHtml(c.progress) : 'working'}${c.lastSign !== c.startedAt ? ` · alive ${ago(c.lastSign)} ago` : ''}</span></div>`).join('') +
+    // Tasks (a trial): reminders count down; watches show what they last saw.
+    tasks.map(t => `<div class="task" title="${escapeHtml(`${t.id}${t.by ? ` · set by ${t.by}` : ''} · say "cancel task ${t.id}" to drop it`)}"><b>TRIAL</b>` +
+      `${t.kind === 'reminder' ? `Reminder in ${until(t.at)}` : 'Watching for'} · ${escapeHtml(t.label)}` +
+      `<span>${t.kind === 'watch' && t.last ? ` · now ${escapeHtml(t.last)}` : ''} · ${escapeHtml(t.id)}</span></div>`).join('');
+}
+setInterval(() => { if (ship.state?.waiting?.length || ship.state?.tasks?.length) renderWaiting(); }, 5000);
+
+let trialSeen = null, trialArm = null, trialIndex = 0;
+function onTrials(list = []) {
+  const top = list[0];
+  if (top && top.id + top.preview.digest !== trialSeen) { trialSeen = top.id + top.preview.digest; trialIndex = 0; toggleTrialCard(true); return; }
+  if (!list.length) return toggleTrialCard(false);
+  if (!$('trialCard').hidden) renderTrialCard();
+  $('trialFloat').hidden = !$('trialCard').hidden;
+}
+function renderTrialCard() {
+  const list = ship.state.trials ?? [], q = list[Math.min(trialIndex, list.length - 1)];
+  if (!q) return toggleTrialCard(false);
+  const ev = q.preview.evals, hrs = Math.round((Date.now() - q.preview.at) / 3_600_000);
+  const draft = $('trialText')?.value ?? '', focused = document.activeElement?.id === 'trialText';   // kept across re-renders
+  $('trialCard').innerHTML = `<div class="phead"><b>${escapeHtml(q.id)}</b><span>${escapeHtml(q.title)}</span><i>ready to try${list.length > 1 ? ` · ${trialIndex + 1} of ${list.length}` : ''}</i></div>
+    <section><h4>What was missing</h4><p>${escapeHtml(q.need)}</p><p style="margin-top:.4em;opacity:.75">${escapeHtml(q.reason)}</p></section>
+    <section><h4>The change</h4><p>${escapeHtml(q.kind)} · ${escapeHtml(q.repository)}${q.pr ? ` · <a href="${escapeHtml(q.pr.url)}" target="_blank" rel="noopener">pull request ${q.pr.number}</a>` : ''}</p>
+      <p style="margin-top:.4em">Build <code>${escapeHtml(q.preview.digest.slice(0, 19))}…</code>, up ${hrs ? `${hrs} h` : 'just now'}${q.sandbox === 'preview_service' ? ', as a preview copy of the service (its telemetry tagged preview)' : ', as a preview 9000 at its own address'}.</p></section>
+    ${ev ? `<section><h4>Evals</h4><p>${escapeHtml(ev.prod)} in production → ${escapeHtml(ev.preview)} in the preview${ev.regressed.length ? `<br><span class="bad">Regressed: ${ev.regressed.map(escapeHtml).join(', ')}</span>` : ''}</p></section>` : '<section><h4>Evals</h4><p class="warn">The deployer reported none.</p></section>'}
+    <section><h4>Tried by</h4><p>${q.tried.length ? q.tried.map(escapeHtml).join(', ') : '<span class="warn">Nobody yet: try it before deciding.</span>'}</p></section>
+    <section><h4>Feedback for Aiden</h4><textarea id="trialText" placeholder="What should change? Aiden updates the same pull request and a new preview is built."></textarea></section>
+    <div class="acts"><a class="try" href="${escapeHtml(q.preview.url)}" target="_blank" rel="noopener">Try it</a>
+      <button class="ship" type="button" ${q.tried.length ? '' : 'disabled'}>Ship what I tried</button><button class="send" type="button">Send feedback</button><button class="reject" type="button">Reject</button>
+      ${list.length > 1 ? '<button class="close next" type="button">Next</button>' : ''}<button class="close" type="button">Close</button>
+      <small>The 9000 never ships his own work. Shipping pins this exact build; only someone signed in who tried it can ship it.</small></div>`;
+  const card = $('trialCard'), sh = card.querySelector('.ship');
+  $('trialText').value = draft; if (focused) $('trialText').focus();
+  card.querySelector('.try').onclick = () => setTimeout(renderTrialCard, 1500);   // the server records the try; the card catches up
+  sh.onclick = () => {
+    if (!sh.classList.contains('armed')) { sh.classList.add('armed'); sh.textContent = 'Click again to ship this build'; clearTimeout(trialArm); trialArm = setTimeout(renderTrialCard, 5000); return; }
+    clearTimeout(trialArm);
+    conn.trial(q.id, 'ship', { digest: q.preview.digest });
+  };
+  card.querySelector('.send').onclick = () => { const text = $('trialText').value.trim(); if (!text) return $('trialText').focus(); conn.trial(q.id, 'feedback', { text }); };
+  card.querySelector('.reject').onclick = () => conn.trial(q.id, 'reject', { text: $('trialText').value.trim() || undefined });
+  card.querySelector('.next')?.addEventListener('click', () => { trialIndex = (trialIndex + 1) % list.length; renderTrialCard(); });
+  card.querySelector('.close:not(.next)').onclick = () => toggleTrialCard(false);
+}
+function toggleTrialCard(open = $('trialCard').hidden) {
+  if (open && !ship.state.trials?.length) open = false;
+  if (open) renderTrialCard();
+  $('trialCard').hidden = !open;
+  $('trialFloat').hidden = open || !ship.state.trials?.length;
+}
+$('trialFloat').onclick = e => { e.stopPropagation(); toggleTrialCard(true); };
+
 // ---- the logo menu ----
 // Voice (HAL or SAL), Simple / Descriptive, the conversation, full screen, bare mode, the eye, settings.
 function renderBrandMenu() {
-  const theme = ship.state.theme === 'hal' ? 'hal' : 'sal';
+  const current = personaOf(ship.state, conn.server).id;
+  const choices = conn.server.personas.length ? conn.server.personas : [{ id: 'hal', name: 'HAL' }, { id: 'sal', name: 'SAL' }];
   const item = (id, label, key) => `<button role="menuitem" data-act="${id}"><span>${label}</span><span>${key ?? ''}</span></button>`;
   $('brandMenu').innerHTML =
-    `<div class="voice">${['hal', 'sal'].map(t => `<button role="menuitemradio" aria-checked="${t === theme}" aria-selected="${t === theme}" data-voice="${t}"><span>${t.toUpperCase()}</span></button>`).join('')}</div>` +
+    `<div class="voice">${choices.map(p => `<button role="menuitemradio" aria-checked="${p.id === current}" aria-selected="${p.id === current}" data-persona="${escapeHtml(p.id)}"><span>${escapeHtml(p.name.toUpperCase())}</span></button>`).join('')}</div>` +
     item('view', view === 'simple' ? 'Descriptive view' : 'Simple view', 'Z') +
     item('chat', chatSnap ? 'Close the conversation' : 'Conversation', 'T') +
     item('full', document.fullscreenElement ? 'Leave full screen' : 'Full screen', 'F') +
@@ -977,12 +1219,13 @@ function renderBrandMenu() {
     item('metrics', $('metrics').hidden ? 'Metrics' : 'Close metrics', 'N') +
     '<div class="sep"></div>' +
     item('eye', 'Connect the eye') +
+    item('dashboard', 'Show the dashboard here') +
     item('settings', 'Settings', ',');
-  for (const b of $('brandMenu').querySelectorAll('[data-voice]')) b.onclick = () => { conn.set({ theme: b.dataset.voice }); };
+  for (const b of $('brandMenu').querySelectorAll('[data-persona]')) b.onclick = () => { conn.set({ persona: b.dataset.persona }); };
   for (const b of $('brandMenu').querySelectorAll('[data-act]')) b.onclick = () => {
     toggleBrandMenu(false);
     ({ view: flipView, chat: toggleChat, metrics: () => toggleMetrics(), full: toggleFullscreen, bare: () => setBare(!bare), eye: () => { $('pair').hidden = false; },
-       settings: () => { location.href = `/settings?room=${room}`; } })[b.dataset.act]();
+       settings: () => { location.href = `/settings?room=${room}`; }, dashboard: () => { location.href = linkTo('dashboard', room); } })[b.dataset.act]();
   };
 }
 function toggleBrandMenu(open = $('brandMenu').hidden) {
@@ -1101,8 +1344,8 @@ function renderMetrics() {
     li.draggable = true; li.tabIndex = 0; li.setAttribute('role', 'option');
     li.dataset.metric = m.name; li.dataset.kind = m.kind;
     li.title = `${m.name} (${m.kind})\nDrag onto a panel to add it there · click or Enter to see it on its own`;
-    li.innerHTML = '<span></span><i></i>';
-    li.firstChild.textContent = m.name; li.lastChild.textContent = m.kind;
+    li.innerHTML = '<span></span><i></i><button class="more-labels" title="Its labels, to drag (split by, only)" aria-label="Show labels">▸</button>';
+    li.firstChild.textContent = m.name; li.children[1].textContent = m.kind;
     list.append(li);
   }
   if (hits.length > MAX_LISTED) list.insertAdjacentHTML('beforeend', `<li class="more">${hits.length - MAX_LISTED} more: type to narrow</li>`);
@@ -1121,7 +1364,29 @@ $('mSearch').oninput = () => renderMetrics();
 $('mSearch').onkeydown = e => { if (e.key === 'Enter' && e.target.value.trim()) { e.preventDefault(); e.stopPropagation(); $('mList').querySelector('li[data-metric]')?.focus(); } };
 const metricAsk = (name, kind) => `${name}${metricsCluster ? ` on cluster ${metricsCluster}` : ''} (a ${kind})`;
 function showMetric(li) { conn.ask(`Show me ${metricAsk(li.dataset.metric, li.dataset.kind)} as a trend.`); }
-$('mList').onclick = e => { const li = e.target.closest('li[data-metric]'); if (li) showMetric(li); };
+$('mList').onclick = e => {
+  const more = e.target.closest('.more-labels');
+  if (more) { e.stopPropagation(); return toggleLabels(more.closest('li[data-metric]'), more); }
+  const li = e.target.closest('li[data-metric]');
+  if (li) showMetric(li);
+};
+// A metric's labels, listed under it, each draggable onto a canvas (Split by, Only).
+async function toggleLabels(li, btn) {
+  const open = li.nextElementSibling?.classList.contains('lab') && li.nextElementSibling.dataset.of === li.dataset.metric;
+  for (const x of [...$('mList').querySelectorAll(`li.lab[data-of="${CSS.escape(li.dataset.metric)}"]`)]) x.remove();
+  btn.textContent = open ? '▸' : '▾';
+  if (open) return;
+  const r = await fetch(`/api/metrics/labels?metric=${encodeURIComponent(li.dataset.metric)}${metricsCluster ? `&cluster=${encodeURIComponent(metricsCluster)}` : ''}`).then(x => x.json()).catch(() => null);
+  let after = li;
+  for (const l of r?.labels ?? []) {
+    const x = document.createElement('li');
+    x.className = 'lab'; x.draggable = true; x.dataset.of = li.dataset.metric; x.dataset.label = l.name;
+    x.title = `${l.name}: ${l.values} value${l.values === 1 ? '' : 's'} on this metric\nDrag onto Split by or Only on an open canvas`;
+    x.innerHTML = '<span></span><i></i>'; x.firstChild.textContent = l.name; x.lastChild.textContent = `${l.values}`;
+    after.after(x); after = x;
+  }
+  if (!r?.labels?.length) { const x = document.createElement('li'); x.className = 'lab more'; x.dataset.of = li.dataset.metric; x.textContent = r ? 'no labels' : 'labels unavailable'; li.after(x); }
+}
 $('mList').onkeydown = e => {
   const li = e.target.closest('li[data-metric]');
   if (!li) return;
@@ -1132,15 +1397,23 @@ $('mList').onkeydown = e => {
 // Drag and drop. The dragged metric travels as text/plain too, so it can be dropped into the question box.
 let dragged = null;
 $('mList').addEventListener('dragstart', e => {
+  const lab = e.target.closest('li.lab[data-label]');
+  if (lab) {
+    dragged = { type: 'label', name: lab.dataset.label, metric: lab.dataset.of };
+    e.dataTransfer.setData('text/plain', lab.dataset.label);
+    e.dataTransfer.effectAllowed = 'copy';
+    document.body.classList.add('dragging-item');
+    return;
+  }
   const li = e.target.closest('li[data-metric]');
   if (!li) return;
-  dragged = { name: li.dataset.metric, kind: li.dataset.kind };
+  dragged = { type: 'metric', name: li.dataset.metric, kind: li.dataset.kind, ...(metricsCluster && { cluster: metricsCluster }) };
   e.dataTransfer.setData('text/plain', li.dataset.metric);
   e.dataTransfer.effectAllowed = 'copy';
-  document.body.classList.add('dragging-metric');
+  document.body.classList.add('dragging-metric', 'dragging-item');
 });
 const clearDrop = () => { for (const el of document.querySelectorAll('.drop-here')) el.classList.remove('drop-here'); };
-addEventListener('dragend', () => { dragged = null; clearDrop(); document.body.classList.remove('dragging-metric'); });
+addEventListener('dragend', () => { dragged = null; clearDrop(); document.body.classList.remove('dragging-metric', 'dragging-item'); for (const z of document.querySelectorAll('.cv .zone')) z.classList.remove('ok', 'no'); });
 // A board panel that charts numbers takes the metric in; anything else (a ship system, a situation card, a log, the
 // space between panels) shows it on its own.
 const TAKES_METRICS = ['timeseries', 'compose', 'stat', 'list', 'graph', 'bargauge'];
@@ -1149,7 +1422,7 @@ const dropTarget = e => {
   return { el, d: d?.board && TAKES_METRICS.includes(d.data?.kind) && d.data?.layout !== 'story' ? d : null };
 };
 $('main').addEventListener('dragover', e => {
-  if (!dragged) return;
+  if (dragged?.type !== 'metric' || e.target.closest?.('.canvas-open')) return;
   e.preventDefault();
   e.dataTransfer.dropEffect = 'copy';
   const { el, d } = dropTarget(e);
@@ -1158,13 +1431,131 @@ $('main').addEventListener('dragover', e => {
 });
 $('main').addEventListener('dragleave', e => { if (!e.relatedTarget || !$('main').contains(e.relatedTarget)) clearDrop(); });
 $('main').addEventListener('drop', e => {
-  if (!dragged) return;
+  if (dragged?.type !== 'metric' || e.target.closest?.('.canvas-open')) return;
   e.preventDefault();
   const { d } = dropTarget(e), m = dragged;
   clearDrop();
   if (d) conn.ask(`Add ${metricAsk(m.name, m.kind)} to ${d.code} "${d.title}": work it into that panel so the two can be read together, and tell me what it shows.`, d.code);
   else conn.ask(`Show me ${metricAsk(m.name, m.kind)} as a trend.`);
 });
+
+// ---- the canvas ----
+// A board panel opened in place (o, or ⧉): it grows, its view's parts show as chips, and while something is dragged
+// its drop zones appear: Split by, Add (left scale), Add, Add (own scale, right), Only, Remove. Each zone says what a
+// drop would do, or why it can't (public/drops.js, the same rules the server applies). The draft is this monitor's
+// alone until "Put up"; other monitors show the panel as being edited. ⌘Z / ⇧⌘Z undo and redo.
+function openCanvas(code) {
+  const d = systems.find(x => x.code === code);
+  if (!d || !canOpen(d)) return showLine('SYS', `${code} can't be opened on the canvas`);
+  if (editingBy.has(code) && drafting?.code !== code) return showLine('SYS', `${editingBy.get(code)} is editing ${code}`);
+  if (drafting && drafting.code !== code) closeCanvas(false);
+  conn.canvas('open', { code });
+}
+function closeCanvas(put) {
+  if (!drafting) return;
+  conn.canvas('close', { code: drafting.code, put });
+  const code = drafting.code;
+  drafting = null;
+  const d = systems.find(x => x.code === code), live = board?.panels.find(p => p.code === code);
+  if (d && live) d.data = live;
+  build();
+}
+function onCanvasMsg(msg) {
+  if (msg.type === 'editing') {
+    msg.by ? editingBy.set(msg.code, msg.by) : editingBy.delete(msg.code);
+    const el = $('main').querySelector(`[data-code="${msg.code}"]`);
+    if (el) msg.by ? (el.dataset.editing = msg.by) : delete el.dataset.editing;
+    return;
+  }
+  if (msg.closed) return;
+  if (msg.refused && !drafting) return showLine('SYS', msg.refused);
+  if (msg.refused) { drafting.note = msg.refused; drafting.refused = true; return renderCanvasBar(); }
+  const first = !drafting;
+  drafting = { code: msg.code, view: msg.view, panel: msg.panel, note: msg.why ?? drafting?.note ?? '', refused: false };
+  const d = systems.find(x => x.code === msg.code);
+  if (d) d.data = msg.panel;
+  if (first) {
+    if (single && single !== msg.code) single = null;
+    if ($('metrics').hidden) toggleMetrics(true);
+    view === 'simple' ? show(single, 'descriptive') : build();
+  } else renderCanvasBar();
+}
+function attachCanvas(el) {
+  const cv = document.createElement('div');
+  cv.className = 'cv';
+  cv.innerHTML = '<div class="bar"></div>' + ['color', 'y', 'plot', 'right', 'scope', 'out'].map(z => `<div class="zone" data-zone="${z}">${ZONE_WORDS[z]}</div>`).join('');
+  cv.addEventListener('click', e => e.stopPropagation());
+  el.classList.add('canvas-open');
+  el.append(cv);
+  for (const z of cv.querySelectorAll('.zone')) {
+    z.addEventListener('dragover', e => {
+      if (!dragged || !drafting) return;
+      e.preventDefault(); e.stopPropagation();
+      const a = accepts(z.dataset.zone, dragged, drafting.view);
+      e.dataTransfer.dropEffect = a.ok ? 'copy' : 'none';
+      z.classList.toggle('ok', a.ok); z.classList.toggle('no', !a.ok);
+      z.textContent = a.words;
+    });
+    z.addEventListener('dragleave', () => { z.classList.remove('ok', 'no'); z.textContent = ZONE_WORDS[z.dataset.zone]; });
+    z.addEventListener('drop', e => {
+      if (!dragged || !drafting) return;
+      e.preventDefault(); e.stopPropagation();
+      const item = dragged, zone = z.dataset.zone;
+      z.classList.remove('ok', 'no'); z.textContent = ZONE_WORDS[zone];
+      if (!accepts(zone, item, drafting.view).ok) return;
+      if (item.type === 'label' && zone === 'scope') return pickValue(cv, item);
+      conn.canvas('drop', { code: drafting.code, zone, item });
+    });
+  }
+  renderCanvasBar(cv.querySelector('.bar'));
+}
+// Only: which value of the label? (its values for the metric it came from, in the browser's cluster)
+async function pickValue(cv, item) {
+  cv.querySelector('.pick')?.remove();
+  const box = document.createElement('div');
+  box.className = 'pick'; box.textContent = '…';
+  cv.append(box);
+  const r = await fetch(`/api/metrics/values?label=${encodeURIComponent(item.name)}${item.metric ? `&metric=${encodeURIComponent(item.metric)}` : ''}${metricsCluster ? `&cluster=${encodeURIComponent(metricsCluster)}` : ''}`).then(x => x.json()).catch(() => null);
+  box.innerHTML = `<button data-x>✕ ${escapeHtml(item.name)}: pick a value</button>` + (r?.values ?? []).slice(0, 200).map(v => `<button data-v="${escapeHtml(v)}">${escapeHtml(v)}</button>`).join('');
+  box.onclick = e => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    box.remove();
+    if (b.dataset.v !== undefined && drafting) conn.canvas('drop', { code: drafting.code, zone: 'scope', item: { ...item, value: b.dataset.v } });
+  };
+}
+const WINDOWS = [[15, '15 min'], [60, '1 h'], [360, '6 h'], [1440, '24 h'], [10080, '7 d']];
+function renderCanvasBar(bar = $('main').querySelector('.canvas-open .cv .bar')) {   // (attachCanvas passes its bar: not in the page yet)
+  if (!bar || !drafting) return;
+  const v = drafting.view, color = v.encode?.color, win = v.scope?.window ?? 60;
+  const chip = (attrs, label, kind, cls = '') => `<span class="chip${cls}" draggable="true" ${attrs}><span>${escapeHtml(label)}</span>${kind ? `<i>${escapeHtml(kind)}</i>` : ''}<button data-x title="Remove">✕</button></span>`;
+  bar.innerHTML =
+    (v.layers ?? []).map(l => chip(`data-item='${JSON.stringify({ type: 'layer', id: l.id })}' title="${escapeHtml(l.metric ? `${l.metric}${l.fn ? ` · ${l.fn}` : ''}${l.agg ? ` · ${l.agg}${l.by?.length ? ` by ${l.by.join(', ')}` : ''}` : ''}${l.quantile !== undefined ? ` · p${l.quantile * 100}` : ''}` : `HAL's query: ${l.query}`)}"`,
+      l.label || l.metric || 'HAL\'s line', l.metric ? '' : 'HAL', l.axis === 'right' ? ' right' : '')).join('') +
+    (color ? chip(`data-item='${JSON.stringify({ type: 'color' })}'`, `split by ${color}`, '') : '') +
+    (v.scope?.filters ?? []).map((f, i) => chip(`data-item='${JSON.stringify({ type: 'filter', index: i })}'`, `${f.label} ${f.op} ${f.value}`, 'only')).join('') +
+    `<select data-window title="Window">${WINDOWS.map(([m, w]) => `<option value="${m}" ${m === win ? 'selected' : ''}>${w}</option>`).join('')}${WINDOWS.some(([m]) => m === win) ? '' : `<option selected value="${win}">${win} min</option>`}</select>` +
+    `<span class="sep"></span><button class="act" data-do="undo" ${v.history?.length ? '' : 'disabled'} title="Undo (⌘Z)">Undo</button>` +
+    `<button class="act" data-do="redo" ${v.redo?.length ? '' : 'disabled'} title="Redo (⇧⌘Z)">Redo</button>` +
+    `<button class="act" data-do="discard" title="Close without changing the board">Discard</button>` +
+    `<button class="act put" data-do="put" ${v.history?.length ? '' : 'disabled'} title="Replace the panel on the board, for everyone (o)">Put up</button>` +
+    `<div class="note ${drafting.refused ? 'no' : ''}">${escapeHtml(drafting.note || 'Drag a metric or a label here from the list. Only you see this until you put it up.')}</div>`;
+  bar.onclick = e => {
+    const x = e.target.closest('[data-x]'), act = e.target.closest('[data-do]');
+    if (x) { const it = JSON.parse(x.closest('.chip').dataset.item); return conn.canvas('drop', { code: drafting.code, zone: 'out', item: it }); }
+    if (!act) return;
+    const a = act.dataset.do;
+    if (a === 'undo' || a === 'redo') conn.canvas(a, { code: drafting.code });
+    else closeCanvas(a === 'put');
+  };
+  bar.querySelector('[data-window]').onchange = e => conn.canvas('drop', { code: drafting.code, zone: 'scope', item: { type: 'window', minutes: Number(e.target.value) } });
+  for (const c of bar.querySelectorAll('.chip[draggable]')) c.addEventListener('dragstart', e => {
+    dragged = JSON.parse(c.dataset.item);
+    e.dataTransfer.setData('text/plain', c.textContent);
+    e.dataTransfer.effectAllowed = 'move';
+    document.body.classList.add('dragging-item');
+  });
+}
 
 // ---- story tours ----
 // While the 9000 narrates a story board, the eye announces which panel each sentence is about (state.focus).
@@ -1216,15 +1607,22 @@ function openDrill(code, anchor, part = null, at = null) {
   box.style.setProperty('--c', d.color);
   box.innerHTML = `<div class="dhead"><b>${escapeHtml(code)}</b><span>${escapeHtml(part ? part.label : d.title)}</span></div>
     ${d.data?.kind === 'aiden' && d.data.aiden?.url ? `<a class="main" href="${escapeHtml(d.data.aiden.url)}" target="_blank" rel="noopener">Open the investigation in Aiden ▸</a>` : ''}
-    <button class="main" type="button">Ask ${who()} about ${part ? escapeHtml(part.kind === 'edge' ? 'this call' : part.label) : 'this'} ▸</button>
+    ${!part ? (d.data?.fix?.runbooks ?? []).map(r => `<a class="main" href="${escapeHtml(r.url)}" target="_blank" rel="noopener">Runbook ${escapeHtml(r.ref)}: ${escapeHtml(r.title)}${r.status === 'draft' ? ' (draft)' : ''} ▸</a>`).join('') : ''}
+    ${!part ? forecastNotes(d.data?.forecast).map(n => `<div class="note">${escapeHtml(n)}</div>`).join('') : ''}
+    <button class="main" type="button">Ask ${who()} about ${part ? escapeHtml(part.kind === 'edge' ? 'this call' : part.kind === 'k8snode' ? `node ${part.label}` : part.label) : 'this'} ▸</button>
     <div class="note busy">Likely questions</div><div class="qs"></div>
     <form><input placeholder="Or ask anything about ${escapeHtml(subject)}…" autocomplete="off" aria-label="Your question about ${escapeHtml(code)}"></form>
+    ${!part && d.data?.fix?.basis === 'investigated' ? `<div class="snz"><span class="note">${who()}'s finding</span><button type="button" data-rate="1">Right</button><button type="button" data-rate="0">Wrong</button></div>` : ''}
     ${part ? '' : d.data?.snooze ? `<div class="snz"><span class="note">Snooze</span>${[[60, '1 hour'], [240, '4 hours'], [1440, '1 day']].map(([m, l]) =>
         `<button type="button" data-snooze="${m}">${l}</button>`).join('')}</div>`
       : board && !board.home ? '<div class="snz"><button type="button" data-snooze="240">Remove from the board</button></div>' : ''}`;
   for (const b of box.querySelectorAll('[data-snooze]')) b.onclick = () => { conn.snooze(code, Number(b.dataset.snooze)); closeDrill(); };
-  box.querySelector('.main').onclick = () => askAbout(part
-    ? (part.kind === 'edge' ? `How are the calls from ${part.from} to ${part.to} doing in ${code}, and does anything need my attention?` : `How is ${part.label} doing in ${code}, and does anything about it need my attention?`)
+  for (const b of box.querySelectorAll('[data-rate]')) b.onclick = () => { conn.rate({ code }, b.dataset.rate === '1'); closeDrill(); };
+  box.querySelector('button.main').onclick = () => askAbout(part
+    ? (part.kind === 'edge' ? `How are the calls from ${part.from} to ${part.to} doing in ${code}, and does anything need my attention?`
+      : part.kind === 'k8snode' ? `How is node ${part.id} doing (memory, readiness, what runs on it), and does anything about it need my attention?`
+      : part.kind === 'workload' ? `How is ${part.label} doing (its pods, memory, restarts), and does anything about it need my attention?`
+      : `How is ${part.label} doing in ${code}, and does anything about it need my attention?`)
     : `Tell me what ${code} shows right now, and whether anything in it needs my attention.`);
   box.querySelector('form').onsubmit = e => { e.preventDefault(); const t = e.target.querySelector('input').value.trim(); if (t) askAbout(t); };
   box.hidden = false;
@@ -1233,7 +1631,7 @@ function openDrill(code, anchor, part = null, at = null) {
   box.style.left = `${Math.max(16, Math.min(innerWidth - w - 16, r.left))}px`;
   box.style.top = `${Math.max(16, r.bottom + h + 12 > innerHeight ? Math.max(16, r.top - h - 8) : r.bottom + 8)}px`;
   box.querySelector('.main').focus();
-  conn.drill(code, part && (part.kind === 'edge' ? { kind: 'edge', from: part.from, to: part.to } : { kind: 'node', id: part.id }));
+  conn.drill(code, part && (part.kind === 'edge' ? { kind: 'edge', from: part.from, to: part.to } : { kind: part.kind, id: part.id }));
 }
 const partKey = p => (p ? (p.kind === 'edge' ? `${p.from}→${p.to}` : p.id) : null);
 // A change's card: what changed (each event, with its time), what the panel's line did next, and a question to put
@@ -1328,7 +1726,7 @@ function showBoard(b) {
   if (same) {
     for (const p of b.panels) {
       const d = systems.find(x => x.code === p.code);
-      if (d) d.data = p;
+      if (d && drafting?.code !== p.code) d.data = p;   // the panel on this monitor's canvas shows the draft
       const el = $('main').querySelector(`[data-code="${p.code}"]`);
       if (el) {
         for (const st of ['ok', 'warn', 'crit', 'nodata']) el.classList.toggle(`status-${st}`, p.status === st);
@@ -1338,6 +1736,7 @@ function showBoard(b) {
     }
   } else {
     systems = b ? b.panels.map(boardPanel) : DISPLAYS;
+    if (drafting) { const dd = systems.find(x => x.code === drafting.code); if (dd && drafting.panel) dd.data = drafting.panel; }
     if (!systems.some(d => d.code === single)) single = null;
     selected = systems[0].code;
     show(single, view);
